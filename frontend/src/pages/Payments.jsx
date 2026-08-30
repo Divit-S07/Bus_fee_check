@@ -47,18 +47,22 @@ const Payments = () => {
   };
 
   const columns = [
-    { title: 'Student', dataIndex: ['studentId', 'firstName'] },
-    { title: 'Amount', dataIndex: 'amount' },
+    { 
+      title: 'Student', 
+      key: 'student', 
+      render: (_, r) => r.studentId ? `${r.studentId.firstName || ''} ${r.studentId.lastName || ''}`.trim() || r.studentId.studentId : 'N/A' 
+    },
+    { title: 'Amount', dataIndex: 'amount', render: (val) => `$${val}` },
     { title: 'Method', dataIndex: 'paymentMethod' },
-    { title: 'Valid From', dataIndex: 'validFrom' },
-    { title: 'Valid Until', dataIndex: 'validUntil' },
+    { title: 'Valid From', dataIndex: 'validFrom', render: (val) => val ? dayjs(val).format('YYYY-MM-DD') : '-' },
+    { title: 'Valid Until', dataIndex: 'validUntil', render: (val) => val ? dayjs(val).format('YYYY-MM-DD') : '-' },
     { title: 'Status', dataIndex: 'status' },
     {
       title: 'Actions',
       render: (_, r) => (
         <Space>
-          <Button type="link" onClick={() => { setEditingId(r._id); form.setFieldsValue({ ...r, paymentDate: dayjs(r.paymentDate), validFrom: dayjs(r.validFrom), validUntil: dayjs(r.validUntil) }); setModalVisible(true); }}>Edit</Button>
-          <Button type="link" danger onClick={async () => { if (window.confirm('Delete?')) { await api.delete(`/payments/${r._id}`); fetchPayments(); } }}>Delete</Button>
+          <Button type="link" onClick={() => { setEditingId(r._id); form.setFieldsValue({ ...r, studentId: r.studentId?._id || r.studentId, paymentDate: r.paymentDate ? dayjs(r.paymentDate) : null, validFrom: r.validFrom ? dayjs(r.validFrom) : null, validUntil: r.validUntil ? dayjs(r.validUntil) : null }); setModalVisible(true); }}>Edit</Button>
+          <Button type="link" danger onClick={async () => { if (window.confirm('Delete this payment record?')) { await api.delete(`/payments/${r._id}`); fetchPayments(); } }}>Delete</Button>
         </Space>
       ),
     },

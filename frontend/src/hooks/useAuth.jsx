@@ -9,7 +9,9 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (isAuthenticated) {
-      api.get('/auth/me').then(res => setUser(res.data)).catch(() => logout());
+      api.get('/auth/me')
+        .then(res => setUser(res.data))
+        .catch(() => logout());
     }
   }, [isAuthenticated]);
 

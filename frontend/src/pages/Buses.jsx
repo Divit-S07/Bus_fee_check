@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, message, Tag, Space } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Switch, message, Tag, Space } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import api from '../api/client';
 
@@ -75,8 +75,8 @@ const Buses = () => {
           <Form.Item name="routeName" rules={[{ required: true }]}><Input placeholder="Route Name" /></Form.Item>
           <Form.Item name="driverName"><Input placeholder="Driver Name" /></Form.Item>
           <Form.Item name="driverPhone"><Input placeholder="Driver Phone" /></Form.Item>
-          <Form.Item name="isActive" valuePropName="checked">
-            <Input type="checkbox" defaultChecked /> Active
+          <Form.Item name="isActive" label="Active" valuePropName="checked" initialValue={true}>
+            <Switch />
           </Form.Item>
           <Button type="primary" htmlType="submit">Save</Button>
         </Form>

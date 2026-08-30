@@ -3,17 +3,23 @@ import { persist } from 'zustand/middleware';
 
 export const authStore = create(
   persist(
-    (set) => ({
+    (set, get) => ({
       accessToken: null,
       refreshToken: null,
       user: null,
       isAuthenticated: false,
-      setTokens: (access, refresh) =>
-        set({ accessToken: access, refreshToken: refresh, isAuthenticated: true }),
+      setTokens: (access, refresh) => {
+        console.log('setTokens called');
+        set({ accessToken: access, refreshToken: refresh, isAuthenticated: true });
+      },
       setUser: (user) => set({ user }),
-      logout: () =>
-        set({ accessToken: null, refreshToken: null, user: null, isAuthenticated: false }),
+      logout: () => {
+        console.log('logout called');
+        set({ accessToken: null, refreshToken: null, user: null, isAuthenticated: false });
+      },
     }),
-    { name: 'auth-storage' }
+    {
+      name: 'auth-storage', // key in localStorage
+    }
   )
 );

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Form, Input, Button, Card, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
@@ -7,19 +7,36 @@ import { authStore } from '../stores/authStore';
 const Login = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const setTokens = authStore(state => state.setTokens);
-  const setUser = authStore(state => state.setUser);
+  const { setTokens, setUser, isAuthenticated } = authStore();
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      console.log('Already authenticated, redirecting to /dashboard');
+      navigate('/dashboard');
+    }
+  }, [isAuthenticated, navigate]);
 
   const onFinish = async (values) => {
     setLoading(true);
     try {
       const res = await api.post('/auth/login', values);
+      console.log('Login response:', res.data);
       const { accessToken, refreshToken, admin } = res.data;
+      
+      // Set state
       setTokens(accessToken, refreshToken);
       setUser(admin);
+      
+      // Check if state updated
+      console.log('After setTokens, isAuthenticated:', authStore.getState().isAuthenticated);
+      
+      // Navigate (will also trigger useEffect above)
       navigate('/dashboard');
+      message.success('Login successful');
     } catch (error) {
-      message.error('Invalid credentials');
+      console.error('Login error:', error.response?.data || error.message);
+      message.error(error.response?.data?.message || 'Invalid credentials');
     } finally {
       setLoading(false);
     }

@@ -4,6 +4,7 @@ import { authStore } from '../../stores/authStore';
 
 const ProtectedRoute = ({ children }) => {
   const isAuthenticated = authStore(state => state.isAuthenticated);
+  console.log('ProtectedRoute - isAuthenticated:', isAuthenticated);
   return isAuthenticated ? children : <Navigate to="/login" />;
 };
 
