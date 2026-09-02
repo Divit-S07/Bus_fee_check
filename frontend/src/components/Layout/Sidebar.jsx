@@ -1,6 +1,6 @@
 import React from 'react';
-import { Layout, Menu } from 'antd';
 import { Link, useLocation } from 'react-router-dom';
+import busLogo from '../../assets/bus-logo.jpg';
 import {
   DashboardOutlined,
   UserOutlined,
@@ -10,26 +10,77 @@ import {
   BarChartOutlined,
 } from '@ant-design/icons';
 
-const { Sider } = Layout;
+const NAV_ITEMS = [
+  { key: '/dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
+  { key: '/students',  icon: <UserOutlined />,      label: 'Students' },
+  { key: '/buses',     icon: <CarOutlined />,        label: 'Buses' },
+  { key: '/travels',   icon: <FileTextOutlined />,   label: 'Travel Records' },
+  { key: '/unpaid',    icon: <WarningOutlined />,    label: 'Unpaid Travels' },
+  { key: '/reports',   icon: <BarChartOutlined />,   label: 'Reports' },
+];
 
-const Sidebar = () => {
+const Sidebar = ({ collapsed, onCollapse }) => {
   const location = useLocation();
-  const items = [
-    { key: '/dashboard', icon: <DashboardOutlined />, label: <Link to="/dashboard">Dashboard</Link> },
-    { key: '/students', icon: <UserOutlined />, label: <Link to="/students">Students</Link> },
-    { key: '/buses', icon: <CarOutlined />, label: <Link to="/buses">Buses</Link> },
-    { key: '/travels', icon: <FileTextOutlined />, label: <Link to="/travels">Travel Records</Link> },
-    { key: '/unpaid', icon: <WarningOutlined />, label: <Link to="/unpaid">Unpaid Travels</Link> },
-    { key: '/reports', icon: <BarChartOutlined />, label: <Link to="/reports">Reports</Link> },
-  ];
+
+  const sidebarWidth = collapsed ? 64 : 220;
 
   return (
-    <Sider theme="dark" style={{ minHeight: '100vh' }}>
-      <div style={{ padding: '16px', color: '#fff', fontSize: '18px', fontWeight: 'bold' }}>
-        Bus Fee System
+    <aside
+      className="custom-sidebar"
+      style={{ width: sidebarWidth, minWidth: sidebarWidth, transition: 'width 0.25s ease', position: 'relative' }}
+      aria-label="Main navigation"
+    >
+      {/* Brand */}
+      <div className="sidebar-brand">
+        <div className="sidebar-brand-icon" aria-hidden="true">
+          <img src={busLogo} alt="Bus Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '4px' }} />
+        </div>
+        {!collapsed && (
+          <div>
+            <div className="sidebar-brand-text">BusTrack</div>
+            <div className="sidebar-brand-sub">Admin Portal</div>
+          </div>
+        )}
       </div>
-      <Menu theme="dark" mode="inline" selectedKeys={[location.pathname]} items={items} />
-    </Sider>
+
+      {/* Navigation */}
+      <nav className="sidebar-nav" aria-label="Primary navigation">
+        {!collapsed && (
+          <div className="sidebar-section-label">Main Menu</div>
+        )}
+
+        {NAV_ITEMS.map((item) => {
+          const isActive = location.pathname === item.key;
+          return (
+            <Link
+              key={item.key}
+              to={item.key}
+              className={`sidebar-nav-item${isActive ? ' active' : ''}`}
+              title={collapsed ? item.label : undefined}
+              aria-current={isActive ? 'page' : undefined}
+              style={collapsed ? { justifyContent: 'center', padding: '9px 0' } : undefined}
+            >
+              <span className="sidebar-nav-icon" aria-hidden="true">
+                {item.icon}
+              </span>
+              {!collapsed && (
+                <span className="sidebar-nav-label">{item.label}</span>
+              )}
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Footer */}
+      <div className="sidebar-footer">
+        {!collapsed && (
+          <div className="sidebar-version">v1.0.0 · Bus Fee System</div>
+        )}
+        {collapsed && (
+          <div style={{ textAlign: 'center', fontSize: 10, color: '#2d3555' }}>v1.0</div>
+        )}
+      </div>
+    </aside>
   );
 };
 
