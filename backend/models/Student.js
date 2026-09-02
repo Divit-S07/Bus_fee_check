@@ -10,6 +10,12 @@ const StudentSchema = new mongoose.Schema(
     class: { type: String },
     department: { type: String },
     busId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bus', required: true },
+    photoUrl: { type: String },
+    paymentStatus: {
+      type: String,
+      enum: ['paid', 'unpaid', 'pending'],
+      default: 'paid',
+    },
     faceRegistrationStatus: {
       type: String,
       enum: ['not_registered', 'pending', 'registered', 'failed'],
