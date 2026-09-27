@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Select, message, Space, Avatar, Upload, Tag } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, message, Space, Avatar, Upload, Tag, Alert } from 'antd';
 import {
   PlusOutlined,
   UserOutlined,
@@ -8,6 +8,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   ClockCircleOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import api from '../api/client';
 
@@ -29,6 +30,10 @@ const Students = () => {
   const [form] = Form.useForm();
   const [editingId, setEditingId] = useState(null);
   const [photoPreview, setPhotoPreview] = useState('');
+  const [receiptModalVisible, setReceiptModalVisible] = useState(false);
+  const [receiptFileList, setReceiptFileList] = useState([]);
+  const [uploadingReceipts, setUploadingReceipts] = useState(false);
+  const [receiptResults, setReceiptResults] = useState(null);
 
   useEffect(() => {
     fetchStudents();
@@ -59,7 +64,11 @@ const Students = () => {
     if (student) {
       setEditingId(student._id);
       const busIdVal = typeof student.busId === 'object' ? student.busId?._id : student.busId;
-      form.setFieldsValue({ ...student, busId: busIdVal });
+      form.setFieldsValue({
+        ...student,
+        busId: busIdVal,
+        phonenumber: student.phonenumber || student.phone || '',
+      });
       setPhotoPreview(student.photoUrl || student.faceData?.referenceImageUrl || '');
     } else {
       setEditingId(null);
@@ -67,6 +76,13 @@ const Students = () => {
       setPhotoPreview('');
     }
     setModalVisible(true);
+  };
+
+  const handleValuesChange = (changed, all) => {
+    if (changed.busId) {
+      const bus = buses.find((b) => b._id === changed.busId);
+      if (bus?.routeName) form.setFieldsValue({ busRoute: bus.routeName });
+    }
   };
 
   const handlePhotoUpload = (file) => {
@@ -118,6 +134,36 @@ const Students = () => {
     }
   };
 
+  // Fee receipt upload
+  const openReceiptModal = () => {
+    setReceiptFileList([]);
+    setReceiptResults(null);
+    setReceiptModalVisible(true);
+  };
+
+  const handleReceiptUpload = async () => {
+    if (receiptFileList.length === 0) {
+      message.warning('Select at least one receipt image');
+      return;
+    }
+    setUploadingReceipts(true);
+    try {
+      const formData = new FormData();
+      receiptFileList.forEach((f) => formData.append('receipts', f));
+      const res = await api.post('/receipts/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setReceiptResults(res.data);
+      const matched = res.data.results.filter((r) => r.status === 'matched').length;
+      message.success(res.data.message || `${matched} receipt(s) matched`);
+      setReceiptFileList([]);
+      fetchStudents();
+    } catch (error) {
+      message.error('Upload failed: ' + (error.response?.data?.message || error.message));
+    }
+    setUploadingReceipts(false);
+  };
+
   // Summary counts
   const paidCount    = students.filter(s => (s.paymentStatus || 'paid') === 'paid').length;
   const unpaidCount  = students.filter(s => s.paymentStatus === 'unpaid').length;
@@ -141,11 +187,21 @@ const Students = () => {
             </Avatar>
             <div>
               <div className="name-text">{name}</div>
-              <div className="id-text">{r.studentId}</div>
+              <div className="id-text">{r.rollnumber || r.studentId}</div>
             </div>
           </div>
         );
       },
+    },
+    {
+      title: 'Program / Batch',
+      key: 'programBatch',
+      render: (r) => (
+        <div>
+          <div style={{ fontWeight: 500, fontSize: 13 }}>{r.program || '—'}</div>
+          {r.batch && <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{r.batch}</div>}
+        </div>
+      ),
     },
     {
       title: 'Class / Dept',
@@ -158,11 +214,18 @@ const Students = () => {
       ),
     },
     {
-      title: 'Bus',
+      title: 'Bus / Route',
       key: 'bus',
-      render: (r) => r.busId?.busNumber
-        ? <Tag color="blue" style={{ fontWeight: 600 }}>{r.busId.busNumber}</Tag>
-        : <span style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>Not assigned</span>,
+      render: (r) => (
+        <div>
+          {r.busId?.busNumber ? (
+            <Tag color="blue" style={{ fontWeight: 600 }}>{r.busId.busNumber}</Tag>
+          ) : (
+            <span style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>Not assigned</span>
+          )}
+          {r.busRoute && <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 2 }}>{r.busRoute}</div>}
+        </div>
+      ),
     },
     {
       title: 'Contact',
@@ -170,7 +233,7 @@ const Students = () => {
       render: (r) => (
         <div>
           <div style={{ fontSize: 13 }}>{r.email || '—'}</div>
-          {r.phone && <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{r.phone}</div>}
+          {r.phonenumber && <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{r.phonenumber}</div>}
         </div>
       ),
     },
@@ -230,16 +293,27 @@ const Students = () => {
             {students.length} students enrolled
           </p>
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => handleModalOpen(null)}
-          id="add-student-btn"
-          size="large"
-          style={{ borderRadius: 10, fontWeight: 600 }}
-        >
-          Add Student
-        </Button>
+        <Space size={10}>
+          <Button
+            icon={<FileTextOutlined />}
+            onClick={openReceiptModal}
+            id="upload-receipt-btn"
+            size="large"
+            style={{ borderRadius: 10, fontWeight: 600 }}
+          >
+            Upload Fee Receipt
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => handleModalOpen(null)}
+            id="add-student-btn"
+            size="large"
+            style={{ borderRadius: 10, fontWeight: 600 }}
+          >
+            Add Student
+          </Button>
+        </Space>
       </div>
 
       {/* Summary Badges */}
@@ -285,9 +359,15 @@ const Students = () => {
         onCancel={() => setModalVisible(false)}
         footer={null}
         destroyOnClose
-        width={560}
+        width={640}
       >
-        <Form form={form} onFinish={handleSubmit} layout="vertical" style={{ marginTop: 16 }}>
+        <Form
+          form={form}
+          onFinish={handleSubmit}
+          onValuesChange={handleValuesChange}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+        >
           {/* Photo Upload */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20, padding: 14, background: 'var(--color-bg)', borderRadius: 10 }}>
             <Avatar
@@ -315,8 +395,8 @@ const Students = () => {
             <Form.Item name="studentId" label="Student ID" rules={[{ required: true, message: 'Required' }]}>
               <Input placeholder="e.g. STU101" />
             </Form.Item>
-            <Form.Item name="class" label="Class">
-              <Input placeholder="e.g. 10th / CSE-3" />
+            <Form.Item name="rollnumber" label="Roll Number">
+              <Input placeholder="e.g. 21CSE045" />
             </Form.Item>
             <Form.Item name="firstName" label="First Name" rules={[{ required: true, message: 'Required' }]}>
               <Input placeholder="First Name" />
@@ -327,33 +407,90 @@ const Students = () => {
             <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email', message: 'Valid email required' }]}>
               <Input placeholder="student@email.com" />
             </Form.Item>
-            <Form.Item name="phone" label="Phone">
-              <Input placeholder="Phone Number" />
+            <Form.Item
+              name="phonenumber"
+              label="Phone Number"
+              rules={[{ pattern: /^[0-9+\-\s()]*$/, message: 'Invalid phone number' }]}
+            >
+              <Input placeholder="e.g. +91 98765 43210" />
+            </Form.Item>
+            <Form.Item name="program" label="Program">
+              <Input placeholder="e.g. B.Tech / MBA" />
+            </Form.Item>
+            <Form.Item name="batch" label="Batch">
+              <Input placeholder="e.g. 2023-2027" />
+            </Form.Item>
+            <Form.Item name="class" label="Class">
+              <Input placeholder="e.g. 10th / CSE-3" />
+            </Form.Item>
+            <Form.Item name="department" label="Department">
+              <Input placeholder="Department" />
             </Form.Item>
           </div>
 
-          <Form.Item name="department" label="Department">
-            <Input placeholder="Department" />
+          {/* Transport details */}
+          <div
+            style={{
+              marginBottom: 16,
+              padding: '12px 14px 4px',
+              background: 'var(--color-bg)',
+              borderRadius: 10,
+              border: '1px solid var(--color-border)',
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--color-text-muted)', marginBottom: 4 }}>
+              Transport Details
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+              <Form.Item name="busId" label="Assigned Bus" rules={[{ required: true, message: 'Required' }]}>
+                <Select placeholder="Select Bus">
+                  {buses.map((b) => (
+                    <Select.Option key={b._id} value={b._id}>
+                      {b.busNumber}{b.routeName ? ` (${b.routeName})` : ''}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+              <Form.Item name="busRoute" label="Bus Route">
+                <Select
+                  placeholder="Select or type route"
+                  showSearch
+                  allowClear
+                  options={Array.from(new Set(buses.map((b) => b.routeName).filter(Boolean))).map((r) => ({
+                    value: r,
+                    label: r,
+                  }))}
+                />
+              </Form.Item>
+              <Form.Item name="transportFee" label="Transport Fee (₹)">
+                <InputNumber placeholder="e.g. 5000" style={{ width: '100%' }} min={0} step={100} />
+              </Form.Item>
+              <Form.Item name="validityPeriod" label="Validity Period">
+                <Select
+                  placeholder="Select validity"
+                  allowClear
+                  options={[
+                    { value: '1 Month', label: '1 Month' },
+                    { value: '3 Months', label: '3 Months' },
+                    { value: '6 Months', label: '6 Months' },
+                    { value: '1 Year', label: '1 Year' },
+                    { value: 'Academic Year', label: 'Academic Year' },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item name="boardingPoint" label="Boarding Point" style={{ gridColumn: '1 / -1' }}>
+                <Input placeholder="e.g. Main Gate, City Centre" />
+              </Form.Item>
+            </div>
+          </div>
+
+          <Form.Item name="paymentStatus" label="Payment Status" initialValue="paid">
+            <Select>
+              <Select.Option value="paid">✅ Paid</Select.Option>
+              <Select.Option value="unpaid">❌ Unpaid</Select.Option>
+              <Select.Option value="pending">⏳ Pending</Select.Option>
+            </Select>
           </Form.Item>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
-            <Form.Item name="busId" label="Assigned Bus" rules={[{ required: true, message: 'Required' }]}>
-              <Select placeholder="Select Bus">
-                {buses.map((b) => (
-                  <Select.Option key={b._id} value={b._id}>
-                    {b.busNumber}{b.routeName ? ` (${b.routeName})` : ''}
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-            <Form.Item name="paymentStatus" label="Payment Status" initialValue="paid">
-              <Select>
-                <Select.Option value="paid">✅ Paid</Select.Option>
-                <Select.Option value="unpaid">❌ Unpaid</Select.Option>
-                <Select.Option value="pending">⏳ Pending</Select.Option>
-              </Select>
-            </Form.Item>
-          </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingTop: 8, borderTop: '1px solid var(--color-border)', marginTop: 8 }}>
             <Button onClick={() => setModalVisible(false)}>Cancel</Button>
@@ -362,6 +499,151 @@ const Students = () => {
             </Button>
           </div>
         </Form>
+      </Modal>
+
+      {/* Upload Fee Receipt Modal */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #10b981, #059669)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <FileTextOutlined style={{ color: '#fff', fontSize: 15 }} />
+            </div>
+            <span>Upload Fee Receipt</span>
+          </div>
+        }
+        open={receiptModalVisible}
+        onCancel={() => setReceiptModalVisible(false)}
+        footer={null}
+        destroyOnClose
+        width={640}
+      >
+        <div style={{ marginTop: 16 }}>
+          <Alert
+            type="info"
+            showIcon
+            message="How it works"
+            description="Upload one or more receipt files (image, PDF or DOCX). The system reads them and stores the receipt data in the database. If the student already exists (matched by Student ID / Roll No / Email / Phone / Name), only their payment status is updated to Paid. If the student is not found, a new student record is created from the receipt data."
+            style={{ marginBottom: 16 }}
+          />
+
+          <Upload.Dragger
+            multiple
+            accept="image/*,.pdf,.docx"
+            fileList={receiptFileList}
+            beforeUpload={(file) => {
+              const name = file.name.toLowerCase();
+              const ok =
+                file.type.startsWith('image/') ||
+                file.type === 'application/pdf' ||
+                file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                name.endsWith('.pdf') ||
+                name.endsWith('.docx');
+              if (!ok) {
+                message.error('Only image, PDF or DOCX files are allowed!');
+                return Upload.LIST_IGNORE;
+              }
+              if (name.endsWith('.doc')) {
+                message.error('.doc is not supported — please save as .docx, PDF or image');
+                return Upload.LIST_IGNORE;
+              }
+              if (file.size / 1024 / 1024 >= 10) {
+                message.error('File must be smaller than 10MB!');
+                return Upload.LIST_IGNORE;
+              }
+              setReceiptFileList((prev) => [...prev, file]);
+              return false;
+            }}
+            onRemove={(file) => setReceiptFileList((prev) => prev.filter((f) => f.uid !== file.uid))}
+            itemRender={() => null}
+            style={{ paddingBottom: 8 }}
+          >
+            <p className="ant-upload-drag-icon">
+              <UploadOutlined />
+            </p>
+            <p className="ant-upload-text">Click or drag receipt files here</p>
+            <p className="ant-upload-hint">Images (JPG/PNG), PDF, DOCX · Max 10MB each · Multiple files allowed</p>
+          </Upload.Dragger>
+
+          {receiptFileList.length > 0 && (
+            <div style={{ marginBottom: 14, fontSize: 13, color: 'var(--color-text-muted)' }}>
+              {receiptFileList.length} file(s) selected
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingTop: 8, borderTop: '1px solid var(--color-border)' }}>
+            <Button onClick={() => setReceiptModalVisible(false)}>Close</Button>
+            <Button
+              type="primary"
+              icon={<UploadOutlined />}
+              loading={uploadingReceipts}
+              onClick={handleReceiptUpload}
+              disabled={receiptFileList.length === 0}
+              style={{ fontWeight: 600 }}
+            >
+              {uploadingReceipts ? 'Reading Receipts…' : 'Upload & Read'}
+            </Button>
+          </div>
+
+          {receiptResults && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>
+                Results — {receiptResults.message}
+              </div>
+              <Table
+                size="small"
+                rowKey={(r, i) => `${r.fileName}-${i}`}
+                dataSource={receiptResults.results}
+                pagination={false}
+                columns={[
+                  {
+                    title: 'File',
+                    dataIndex: 'fileName',
+                    render: (v) => <span style={{ fontSize: 12 }}>{v}</span>,
+                  },
+                  {
+                    title: 'Status',
+                    dataIndex: 'status',
+                    render: (s) =>
+                      s === 'matched' ? (
+                        <Tag color="green" style={{ fontWeight: 600 }}>PAID · UPDATED</Tag>
+                      ) : s === 'created' ? (
+                        <Tag color="purple" style={{ fontWeight: 600 }}>NEW STUDENT</Tag>
+                      ) : s === 'unmatched' ? (
+                        <Tag color="orange" style={{ fontWeight: 600 }}>SAVED · UNMATCHED</Tag>
+                      ) : (
+                        <Tag color="red" style={{ fontWeight: 600 }}>ERROR</Tag>
+                      ),
+                  },
+                  {
+                    title: 'Receipt #',
+                    dataIndex: 'receiptNumber',
+                    render: (v) => v || '—',
+                  },
+                  {
+                    title: 'Amount',
+                    dataIndex: 'amount',
+                    render: (v) => (v != null ? `₹${v}` : '—'),
+                  },
+                  {
+                    title: 'Student',
+                    key: 'student',
+                    render: (_, r) =>
+                      r.student ? (
+                        <span style={{ fontSize: 12 }}>
+                          {r.student.name}
+                          <span style={{ color: 'var(--color-text-muted)' }}> ({r.student.studentId})</span>
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                          {r.status === 'error' ? r.message : 'Not found — saved for review'}
+                        </span>
+                      ),
+                  },
+                ]}
+              />
+            </div>
+          )}
+        </div>
       </Modal>
     </div>
   );

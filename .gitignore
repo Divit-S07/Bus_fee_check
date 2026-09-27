@@ -45,3 +45,6 @@ Thumbs.db
 .parcel-cache
 .vite/
 *.tmp
+
+# Uploaded receipts
+backend/uploads/

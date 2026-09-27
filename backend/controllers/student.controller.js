@@ -28,7 +28,9 @@ exports.createStudent = async (req, res) => {
     const student = new Student(req.body);
     await student.save();
     // Add student to bus assignedStudents
-    await Bus.findByIdAndUpdate(student.busId, { $push: { assignedStudents: student._id } });
+    if (student.busId) {
+      await Bus.findByIdAndUpdate(student.busId, { $push: { assignedStudents: student._id } });
+    }
     res.status(201).json(student);
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -51,7 +53,9 @@ exports.deleteStudent = async (req, res) => {
   try {
     const student = await Student.findByIdAndDelete(req.params.id);
     if (!student) return res.status(404).json({ message: 'Student not found' });
-    await Bus.findByIdAndUpdate(student.busId, { $pull: { assignedStudents: student._id } });
+    if (student.busId) {
+      await Bus.findByIdAndUpdate(student.busId, { $pull: { assignedStudents: student._id } });
+    }
     res.json({ message: 'Student deleted' });
   } catch (error) {
     res.status(500).json({ message: error.message });
