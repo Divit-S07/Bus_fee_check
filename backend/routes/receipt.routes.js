@@ -8,6 +8,8 @@ const {
   uploadReceipts,
   getAllReceipts,
   getReceiptsByStudent,
+  getReceiptImage,
+  getReceiptStudentPhoto,
 } = require('../controllers/receipt.controller');
 
 const uploadDir = path.join(__dirname, '..', 'uploads', 'receipts');
@@ -40,6 +42,8 @@ const router = express.Router();
 router.use(authenticate);
 router.get('/', getAllReceipts);
 router.get('/student/:id', getReceiptsByStudent);
+router.get('/:id/image', getReceiptImage);
+router.get('/:id/photo', getReceiptStudentPhoto);
 router.post(
   '/upload',
   requireRole(['super_admin', 'admin']),

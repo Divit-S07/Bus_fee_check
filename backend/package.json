@@ -8,6 +8,9 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@vladmandic/face-api": "^1.7.15",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
@@ -15,10 +18,12 @@
     "express-rate-limit": "^7.1.5",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
+    "jszip": "^3.10.2",
     "mammoth": "^1.12.3",
     "mongoose": "^7.5.2",
     "multer": "^2.4.0",
     "pdf-parse": "^2.4.5",
+    "sharp": "^0.35.4",
     "socket.io": "^4.7.2",
     "tesseract.js": "^7.0.0"
   },

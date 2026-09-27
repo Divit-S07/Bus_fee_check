@@ -3,13 +3,16 @@ node_modules/
 **/node_modules/
 jspm_packages/
 
-# Environment files
+# Environment files - NEVER commit the real ones.
+# Commit the templates instead: .env.example / .env.sample
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 *.env
+!.env.example
+!.env.*.example
 
 # Build outputs
 dist/
@@ -42,9 +45,16 @@ Thumbs.db
 # Cache & Temporary files
 .cache/
 .eslintcache
-.parcel-cache
 .vite/
 *.tmp
 
-# Uploaded receipts
+# Python - local face AI service (ai-service/)
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Uploaded receipts & captured face photos (per-user data, never in git)
 backend/uploads/

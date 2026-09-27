@@ -11,6 +11,7 @@ import Buses from './pages/Buses';
 import TravelRecords from './pages/TravelRecords';
 import UnpaidTravels from './pages/UnpaidTravels';
 import Reports from './pages/Reports';
+import FaceScan from './pages/FaceScan';
 
 const antdTheme = {
   token: {
@@ -129,6 +130,7 @@ const App = () => (
             <Route path="travels"   element={<TravelRecords />} />
             <Route path="unpaid"    element={<UnpaidTravels />} />
             <Route path="reports"   element={<Reports />} />
+            <Route path="face-scan" element={<FaceScan />} />
           </Route>
         </Routes>
       </AuthProvider>

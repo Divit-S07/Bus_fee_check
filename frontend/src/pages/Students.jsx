@@ -515,14 +515,14 @@ const Students = () => {
         onCancel={() => setReceiptModalVisible(false)}
         footer={null}
         destroyOnClose
-        width={640}
+        width={760}
       >
         <div style={{ marginTop: 16 }}>
           <Alert
             type="info"
             showIcon
             message="How it works"
-            description="Upload one or more receipt files (image, PDF or DOCX). The system reads them and stores the receipt data in the database. If the student already exists (matched by Student ID / Roll No / Email / Phone / Name), only their payment status is updated to Paid. If the student is not found, a new student record is created from the receipt data."
+            description="Upload one or more receipt files (image, PDF or DOCX). The system reads the receipt, extracts the receipt image and the student photo (the small rectangle box around it) and stores them in the database. If the student already exists (matched by Student ID / Roll No / Email / Phone / Name), only the fee status and bus route are updated. If the student is not found, a new student record is created from the receipt data with the extracted photo."
             style={{ marginBottom: 16 }}
           />
 
@@ -620,19 +620,74 @@ const Students = () => {
                     render: (v) => v || '—',
                   },
                   {
+                    title: 'Image',
+                    key: 'image',
+                    render: (_, r) =>
+                      r.hasImage && r.receiptId ? (
+                        <Button
+                          type="link"
+                          size="small"
+                          style={{ padding: 0, fontWeight: 600 }}
+                          onClick={async () => {
+                            try {
+                              const res = await api.get(`/receipts/${r.receiptId}/image`, { responseType: 'blob' });
+                              const url = URL.createObjectURL(res.data);
+                              window.open(url, '_blank');
+                            } catch {
+                              message.error('Could not load receipt image');
+                            }
+                          }}
+                        >
+                          View
+                        </Button>
+                      ) : (
+                        <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>—</span>
+                      ),
+                  },
+                  {
                     title: 'Amount',
                     dataIndex: 'amount',
                     render: (v) => (v != null ? `₹${v}` : '—'),
+                  },
+                  {
+                    title: 'Student Photo',
+                    key: 'studentPhoto',
+                    render: (_, r) =>
+                      r.hasStudentPhoto && r.receiptId ? (
+                        <Button
+                          type="link"
+                          size="small"
+                          style={{ padding: 0, fontWeight: 600 }}
+                          onClick={async () => {
+                            try {
+                              const res = await api.get(`/receipts/${r.receiptId}/photo`, { responseType: 'blob' });
+                              const url = URL.createObjectURL(res.data);
+                              window.open(url, '_blank');
+                            } catch {
+                              message.error('Could not load extracted student photo');
+                            }
+                          }}
+                        >
+                          View
+                        </Button>
+                      ) : (
+                        <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>—</span>
+                      ),
                   },
                   {
                     title: 'Student',
                     key: 'student',
                     render: (_, r) =>
                       r.student ? (
-                        <span style={{ fontSize: 12 }}>
-                          {r.student.name}
-                          <span style={{ color: 'var(--color-text-muted)' }}> ({r.student.studentId})</span>
-                        </span>
+                        <div>
+                          <span style={{ fontSize: 12 }}>
+                            {r.student.name}
+                            <span style={{ color: 'var(--color-text-muted)' }}> ({r.student.studentId})</span>
+                          </span>
+                          {r.busRoute && (
+                            <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>Route: {r.busRoute}</div>
+                          )}
+                        </div>
                       ) : (
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                           {r.status === 'error' ? r.message : 'Not found — saved for review'}

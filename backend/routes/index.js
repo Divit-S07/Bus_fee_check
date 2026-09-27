@@ -8,6 +8,7 @@ const reportRoutes = require('./report.routes');
 const webhookRoutes = require('./webhook.routes');
 const analyticsRoutes = require('./analytics.routes');
 const receiptRoutes = require('./receipt.routes');
+const faceRoutes = require('./face.routes');
 
 const router = express.Router();
 router.use('/auth', authRoutes);
@@ -19,5 +20,6 @@ router.use('/reports', reportRoutes);
 router.use('/webhook', webhookRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/receipts', receiptRoutes);
+router.use('/face', faceRoutes);
 
 module.exports = router;

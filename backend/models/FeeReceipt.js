@@ -11,6 +11,16 @@ const FeeReceiptSchema = new mongoose.Schema(
     fileName: { type: String, required: true },
     filePath: { type: String, required: true },
     mimeType: { type: String },
+    // Receipt image extracted during the extraction process and stored in DB
+    image: {
+      data: { type: Buffer },
+      contentType: { type: String },
+    },
+    // Student photo cropped out of the receipt (small rectangle box / face)
+    studentPhoto: {
+      data: { type: Buffer },
+      contentType: { type: String },
+    },
     ocrText: { type: String },
     parsed: {
       name: String,
@@ -20,6 +30,7 @@ const FeeReceiptSchema = new mongoose.Schema(
       phone: String,
       program: String,
       batch: String,
+      route: String,
     },
     status: {
       type: String,

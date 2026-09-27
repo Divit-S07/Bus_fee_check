@@ -8,12 +8,14 @@ import {
   FileTextOutlined,
   WarningOutlined,
   BarChartOutlined,
+  ScanOutlined,
 } from '@ant-design/icons';
 
 const NAV_ITEMS = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
   { key: '/students',  icon: <UserOutlined />,      label: 'Students' },
   { key: '/buses',     icon: <CarOutlined />,        label: 'Buses' },
+  { key: '/face-scan', icon: <ScanOutlined />,       label: 'Face Scan' },
   { key: '/travels',   icon: <FileTextOutlined />,   label: 'Travel Records' },
   { key: '/unpaid',    icon: <WarningOutlined />,    label: 'Unpaid Travels' },
   { key: '/reports',   icon: <BarChartOutlined />,   label: 'Reports' },

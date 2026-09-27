@@ -1,0 +1,23 @@
+# Light, CPU-only stack for the local DeepFace face-recognition service.
+# No TensorFlow, no PyTorch, no GPU - everything runs on the laptop CPU.
+#
+# Install with:
+#     python -m pip install -r requirements.txt
+#     python -m pip install --no-deps deepface     (--no-deps keeps tensorflow out)
+#
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pymongo>=4.6
+python-dotenv>=1.0
+numpy>=1.26
+opencv-contrib-python-headless>=4.9   # cv2.FaceRecognizerSF (SFace) + FaceDetectorYN (YuNet)
+marshmallow>=4.0
+pillow>=10.0
+werkzeug>=3.0
+requests>=2.31
+gdown>=5.0
+lightphe>=0.0.25
+lightdsa>=0.0.3
+fire>=0.5
+pandas>=2.0
+tqdm>=4.66
