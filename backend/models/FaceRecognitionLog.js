@@ -12,6 +12,12 @@ const FaceRecognitionLogSchema = new mongoose.Schema(
     modelVersion: { type: String, required: true },
     errorMessage: { type: String },
     faceCount: { type: Number, default: 1 },
+    framesUsed: { type: Number },
+    isUnknown: { type: Boolean, default: false },
+    // raw JPEG of the rejected frame; select:false so normal log queries stay light
+    capturedImage: { type: Buffer, select: false },
+    capturedImageContentType: { type: String, default: 'image/jpeg' },
+    capturedImageUrl: { type: String },
     isManualReview: { type: Boolean, default: false },
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
     reviewedAt: { type: Date },

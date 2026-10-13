@@ -42,7 +42,7 @@ const postJSON = async (path, body) => {
   } catch (error) {
     if (error.name === 'AbortError') {
       const timeoutError = new Error('Face AI service timed out');
-      timeouterror.status = 504;
+      timeoutError.status = 504;
       timeoutError.code = 'ai_timeout';
       throw timeoutError;
     }
@@ -50,7 +50,7 @@ const postJSON = async (path, body) => {
     const offlineError = new Error(
       `Face AI service is unreachable at ${AI_SERVICE_URL}. Start it with: cd ai-service && python main.py`
     );
-    offlineerror.status = 503;
+    offlineError.status = 503;
     offlineError.code = 'ai_offline';
     throw offlineError;
   } finally {
@@ -58,9 +58,17 @@ const postJSON = async (path, body) => {
   }
 };
 
-const matchFace = (image, topK = 3) => postJSON('/face/match', { image, top_k: topK });
+const toFrames = (frames) => {
+  const list = Array.isArray(frames) ? frames : [frames];
+  return list.filter((f) => typeof f === 'string' && f.length > 32).slice(0, 5);
+};
 
-const registerFace = (studentId, image) => postJSON('/face/register', { student_id: studentId, image });
+const matchFace = (frames, topK = 3) => postJSON('/face/match', { images: toFrames(frames), top_k: topK });
+
+const detectFace = (frame) => postJSON('/face/detect', { image: frame });
+
+const registerFace = (studentId, frames) =>
+  postJSON('/face/register', { student_id: studentId, images: toFrames(frames) });
 
 const getHealth = async () => {
   const controller = new AbortController();
@@ -77,4 +85,4 @@ const getHealth = async () => {
   }
 };
 
-module.exports = { matchFace, registerFace, getHealth, AI_SERVICE_URL };
+module.exports = { matchFace, detectFace, registerFace, getHealth, AI_SERVICE_URL };

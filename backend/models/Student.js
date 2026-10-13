@@ -30,6 +30,7 @@ const StudentSchema = new mongoose.Schema(
     },
     faceData: {
       embeddings: { type: [Number], default: [] },
+      templates: { type: [[Number]], default: undefined },
       referenceImageUrl: { type: String },
       registeredAt: { type: Date },
       lastUpdatedAt: { type: Date },

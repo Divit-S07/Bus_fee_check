@@ -14,6 +14,7 @@ everything runs fully offline.
 Endpoints
 ---------
 GET  /health        service, model and MongoDB status
+POST /face/detect   is somebody in front of the camera? (YuNet only, no match)
 POST /face/match    match a webcam frame against every registered student face
 POST /face/register compute + store an embedding for one student
 
@@ -23,7 +24,6 @@ Run
 """
 
 import base64
-import binascii
 import os
 import re
 import sys
@@ -31,6 +31,7 @@ import time
 import uuid
 from importlib import metadata as importlib_metadata
 from pathlib import Path
+from typing import List, Optional
 
 # deepface logs with emoji - make sure the Windows console can print them
 for _stream in (sys.stdout, sys.stderr):
@@ -97,6 +98,31 @@ MATCH_THRESHOLD = float(_env_threshold) if _env_threshold else _default_threshol
 # set to false only for demos/tests with images that contain no detectable face
 ENFORCE_DETECTION = os.getenv("FACE_ENFORCE_DETECTION", "true").strip().lower() not in ("0", "false", "no")
 
+# YuNet reads this on every detect() call. 0.9 is the library default and it is far too
+# strict for a webcam - it is what produced the repeated "no face" scans.
+YUNET_SCORE = (
+    os.getenv("YUNET_SCORE_THRESHOLD", "").strip()
+    or os.environ.get("yunet_score_threshold", "").strip()
+    or "0.6"
+)
+os.environ["yunet_score_threshold"] = YUNET_SCORE
+
+# detection quality gate - frames below this YuNet score are discarded (whole-image
+# fallbacks report 0, so they are dropped too)
+MIN_DET_CONF = 0.0 if not ENFORCE_DETECTION else float(os.getenv("FACE_MIN_DET_CONF", YUNET_SCORE))
+# Laplacian variance of the face crop; low = motion blurred / out of focus frame
+MIN_BLUR = float(os.getenv("FACE_MIN_BLUR", "25"))
+# pad the detected box before cropping - SFace is sensitive to tight crops
+EXPAND_PCT = int(os.getenv("FACE_EXPAND_PERCENTAGE", "15"))
+# best-vs-runner-up cosine gap required to accept a match (kills near-ties)
+MIN_MARGIN = float(os.getenv("FACE_MIN_MARGIN", "0.04"))
+# frames per scan / per enrollment, and how many templates are kept per student
+MAX_FRAMES = max(1, int(os.getenv("FACE_MAX_FRAMES", "5")))
+MAX_TEMPLATES = max(1, int(os.getenv("FACE_MAX_TEMPLATES", "4")))
+TEMPLATE_DEDUP = float(os.getenv("FACE_TEMPLATE_DEDUP", "0.97"))
+# re-read + re-normalise the Mongo gallery at most this often (0 = every scan)
+GALLERY_TTL_MS = int(os.getenv("FACE_GALLERY_TTL_MS", "3000"))
+
 HOST = os.getenv("AI_SERVICE_HOST", "127.0.0.1")
 PORT = int(os.getenv("AI_SERVICE_PORT", "8000"))
 FACES_DIR = Path(
@@ -119,7 +145,10 @@ app.add_middleware(
 # Request models
 # ---------------------------------------------------------------------------
 class ImageRequest(BaseModel):
-    image: str = Field(..., description="base64 encoded webcam frame (data URL or raw base64)")
+    image: Optional[str] = Field(None, description="single base64 webcam frame")
+    images: Optional[List[str]] = Field(
+        None, description="2-5 consecutive webcam frames (fused into one query vector)"
+    )
     top_k: int = Field(3, ge=1, le=10, description="How many candidate matches to return")
 
 
@@ -127,41 +156,95 @@ class RegisterRequest(ImageRequest):
     student_id: str
 
 
+class DetectRequest(BaseModel):
+    image: str = Field(..., description="base64 webcam frame (data URL or raw base64)")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def decode_image(data: str) -> np.ndarray:
+def _decode_one(data: str) -> Optional[np.ndarray]:
+    """base64 -> BGR frame (downscaled). Returns None when the payload is unusable."""
     if data.startswith("data:"):
         data = data.split(",", 1)[-1]
     try:
         raw = base64.b64decode(data)
-    except (binascii.Error, ValueError):
-        raise HTTPException(status_code=400, detail={"code": "bad_image", "message": "Frame is not valid base64"})
-    try:
         frame = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
-        if frame is not None and MAX_FRAME_WIDTH and frame.shape[1] > MAX_FRAME_WIDTH:
-            # shrink oversized frames: detection stays accurate, CPU cost drops
-            scale = MAX_FRAME_WIDTH / float(frame.shape[1])
-            frame = cv2.resize(frame, (MAX_FRAME_WIDTH, max(1, int(frame.shape[0] * scale))))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "bad_image", "message": f"Could not decode the image: {exc}"},
-        )
-    if frame is None:
-        raise HTTPException(status_code=400, detail={"code": "bad_image", "message": "Could not decode the image"})
+    except Exception:
+        return None
+    if frame is None or frame.size == 0:
+        return None
+    if MAX_FRAME_WIDTH and frame.shape[1] > MAX_FRAME_WIDTH:
+        # shrink oversized frames: detection stays accurate, CPU cost drops
+        scale = MAX_FRAME_WIDTH / float(frame.shape[1])
+        frame = cv2.resize(frame, (MAX_FRAME_WIDTH, max(1, int(frame.shape[0] * scale))))
     return frame
 
 
-def embed(frame: np.ndarray):
-    """Return (unit-normalised embedding, face count)."""
+def decode_frames(req: ImageRequest) -> List[np.ndarray]:
+    payloads = [x for x in (req.images or []) if isinstance(x, str) and x.strip()]
+    if not payloads and isinstance(req.image, str) and req.image.strip():
+        payloads = [req.image]
+    payloads = payloads[:MAX_FRAMES]
+
+    frames = []
+    for payload in payloads:
+        frame = _decode_one(payload)
+        if frame is not None:
+            frames.append(frame)
+    if not frames:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "bad_image", "message": "Frame is not a decodable image"},
+        )
+    return frames
+
+
+def _sharpness(frame: np.ndarray, area: dict) -> float:
+    """Laplacian variance of the detected face crop - higher is sharper."""
+    try:
+        x, y = int(area.get("x", 0)), int(area.get("y", 0))
+        w, h = int(area.get("w", 0)), int(area.get("h", 0))
+        if w <= 0 or h <= 0:
+            return 0.0
+        pad = int(0.1 * max(w, h))
+        crop = frame[max(0, y - pad): y + h + pad, max(0, x - pad): x + w + pad]
+        if crop.size == 0:
+            return 0.0
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    except Exception:
+        return 0.0
+
+
+def _unit(vec) -> Optional[np.ndarray]:
+    arr = np.asarray(vec, dtype=np.float32)
+    if arr.ndim != 1 or arr.size == 0:
+        return None
+    n = float(np.linalg.norm(arr))
+    if n == 0:
+        return None
+    return arr / n
+
+
+def embed_frames(frames: List[np.ndarray]):
+    """Embed 1..N frames in a single batched SFace pass.
+
+    Returns (unit query vector, [(unit vec, weight), ...], stats). The query is the
+    detection-confidence x sharpness weighted mean of every usable frame, which is far
+    steadier than a single grab. Raises 422 when no usable face is in any frame.
+    """
     try:
         reps = DeepFace.represent(
-            img_path=frame,
+            img_path=list(frames),
             model_name=MODEL_NAME,
             detector_backend=DETECTOR_BACKEND,
-            enforce_detection=ENFORCE_DETECTION,
+            # batch-safe: instead of aborting on one bad frame we filter on the
+            # detector score below (whole-image fallbacks report face_confidence 0)
+            enforce_detection=False,
             align=True,
+            expand_percentage=EXPAND_PCT,
+            max_faces=1,
         )
     except (FaceNotDetected, ValueError) as exc:
         raise HTTPException(
@@ -176,14 +259,50 @@ def embed(frame: np.ndarray):
             detail={"code": "inference_error", "message": f"{type(exc).__name__}: {exc}"},
         )
 
-    if not reps:
-        raise HTTPException(status_code=422, detail={"code": "no_face", "message": "No face detected in the frame"})
+    # single image in -> flat list of dicts; several images in -> list of lists
+    groups = [reps] if len(frames) == 1 else reps
 
-    vec = np.asarray(reps[0]["embedding"], dtype=np.float32)
-    norm = float(np.linalg.norm(vec))
-    if norm == 0:
+    sharp_ref = max(MIN_BLUR * 2.0, 1.0)
+    usable = []
+    for idx, frame in enumerate(frames):
+        group = groups[idx] if idx < len(groups) else []
+        if not group:
+            continue
+        rep = group[0]
+        det = float(rep.get("face_confidence") or 0.0)
+        if det < MIN_DET_CONF:
+            continue
+        vec = _unit(rep.get("embedding"))
+        if vec is None:
+            continue
+        sharp = _sharpness(frame, rep.get("facial_area") or {})
+        weight = det * min(1.0, sharp / sharp_ref)
+        usable.append((vec, max(weight, 1e-3), sharp, det))
+
+    if not usable:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "no_face",
+                "message": f"No face detected in the {len(frames)} frame(s) sent",
+            },
+        )
+
+    stacked = np.stack([v for v, _, _, _ in usable])
+    weights = np.asarray([w for _, w, _, _ in usable], dtype=np.float32)
+    query = stacked.T @ weights
+    n = float(np.linalg.norm(query))
+    if n == 0:
         raise HTTPException(status_code=500, detail={"code": "inference_error", "message": "Empty embedding"})
-    return vec / norm, len(reps)
+    query = query / n
+
+    stats = {
+        "frames_used": len(usable),
+        "frames_total": len(frames),
+        "avg_sharpness": round(sum(s for _, _, s, _ in usable) / len(usable), 1),
+        "avg_det_confidence": round(sum(d for _, _, _, d in usable) / len(usable), 3),
+    }
+    return query, [(v, w) for v, w, _, _ in usable], stats
 
 
 def _candidate(doc: dict, confidence: float) -> dict:
@@ -194,6 +313,93 @@ def _candidate(doc: dict, confidence: float) -> dict:
         "payment_status": doc.get("paymentStatus"),
         "confidence": round(confidence, 4),
     }
+
+
+# ---------------------------------------------------------------------------
+# Gallery cache - normalised vectors are rebuilt at most every GALLERY_TTL_MS
+# instead of on every scan (Mongo read + L2 norm of the whole roster).
+# ---------------------------------------------------------------------------
+_GALLERY = {"at": 0.0, "loaded": False, "dim": 0, "matrix": None, "owners": None, "docs": []}
+
+
+def _templates_of(doc: dict) -> List[list]:
+    """Every stored embedding for a student: faceData.templates (n x 128) or the
+    legacy single faceData.embeddings (128)."""
+    face = doc.get("faceData") or {}
+    for key in ("templates", "embeddings"):
+        raw = face.get(key)
+        if not raw:
+            continue
+        if isinstance(raw[0], (list, tuple)):
+            return [list(t) for t in raw]
+        return [list(raw)]
+    return []
+
+
+def _gallery(dim: int):
+    """Return (matrix [R x D], owners [R], docs) where every row belongs to the
+    student docs[owners[i]]. Cached for GALLERY_TTL_MS."""
+    now = time.monotonic() * 1000.0
+    if (
+        _GALLERY["loaded"]
+        and _GALLERY["dim"] == dim
+        and GALLERY_TTL_MS > 0
+        and now - _GALLERY["at"] < GALLERY_TTL_MS
+    ):
+        return _GALLERY["matrix"], _GALLERY["owners"], _GALLERY["docs"]
+
+    try:
+        docs = [
+            d
+            for d in students.find(
+                {"faceRegistrationStatus": "registered"},
+                {
+                    "faceData.templates": 1,
+                    "faceData.embeddings": 1,
+                    "firstName": 1,
+                    "lastName": 1,
+                    "studentId": 1,
+                    "paymentStatus": 1,
+                },
+            )
+            if (d.get("faceData") or {}).get("templates") or (d.get("faceData") or {}).get("embeddings")
+        ]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "db_unavailable",
+                "message": f"MongoDB is not reachable from the AI service: {exc}",
+            },
+        ) from exc
+
+    rows, owners, valid = [], [], []
+    for doc in docs:
+        vectors = []
+        for raw in _templates_of(doc):
+            vec = _unit(raw)
+            if vec is None or vec.size != dim:
+                # a corrupted/legacy embedding must never break the whole scan
+                logger.warning("skipping bad embedding for student %s", doc.get("studentId"))
+                continue
+            vectors.append(vec)
+        if not vectors:
+            continue
+        owner = len(valid)
+        valid.append(doc)
+        rows.extend(vectors)
+        owners.extend([owner] * len(vectors))
+
+    matrix = np.stack(rows) if rows else None
+    _GALLERY.update(
+        at=now,
+        loaded=True,
+        dim=dim,
+        matrix=matrix,
+        owners=np.asarray(owners, dtype=np.int64) if rows else None,
+        docs=valid,
+    )
+    return _GALLERY["matrix"], _GALLERY["owners"], _GALLERY["docs"]
 
 
 def _internal_error(exc: Exception) -> HTTPException:
@@ -246,8 +452,50 @@ def health():
         "model": MODEL_NAME,
         "detector": DETECTOR_BACKEND,
         "threshold": MATCH_THRESHOLD,
+        "margin": MIN_MARGIN,
+        "detector_score": float(YUNET_SCORE),
+        "max_frames": MAX_FRAMES,
         "mongodb": mongo_ok,
         "deepface": version,
+    }
+
+
+@app.post("/face/detect")
+def detect(req: DetectRequest):
+    """Presence check for the auto-scan loop: YuNet only - no embedding, no
+    MongoDB, no log, no match. The frontend polls this about once a second and
+    only calls /face/match when somebody is actually standing in front of it."""
+    started = time.perf_counter()
+    frame = _decode_one(req.image)
+    if frame is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "bad_image", "message": "Frame is not a decodable image"},
+        )
+    try:
+        faces = DeepFace.extract_faces(
+            img_path=frame,
+            detector_backend=DETECTOR_BACKEND,
+            enforce_detection=False,
+            align=False,
+            expand_percentage=0,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "inference_error", "message": f"{type(exc).__name__}: {exc}"},
+        )
+
+    # with enforce_detection=False a miss comes back as the whole image with
+    # confidence 0, so counting real detections is just a score filter
+    count = sum(1 for f in faces if float(f.get("confidence") or 0.0) >= MIN_DET_CONF)
+    return {
+        "face_count": count,
+        "detector": DETECTOR_BACKEND,
+        "detector_score": float(YUNET_SCORE),
+        "processing_time_ms": int((time.perf_counter() - started) * 1000),
     }
 
 
@@ -263,76 +511,53 @@ def match(req: ImageRequest):
 
 def _match_impl(req: ImageRequest):
     started = time.perf_counter()
-    frame = decode_image(req.image)
-    query, face_count = embed(frame)
-
-    try:
-        docs = [
-            d
-            for d in students.find(
-                {"faceRegistrationStatus": "registered"},
-                {
-                    "faceData.embeddings": 1,
-                    "firstName": 1,
-                    "lastName": 1,
-                    "studentId": 1,
-                    "paymentStatus": 1,
-                },
-            )
-            if (d.get("faceData") or {}).get("embeddings")
-        ]
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "db_unavailable",
-                "message": f"MongoDB is not reachable from the AI service: {exc}",
-            },
-        ) from exc
+    frames = decode_frames(req)
+    query, _per_frame, stats = embed_frames(frames)
+    matrix, owners, docs = _gallery(query.size)
 
     elapsed = int((time.perf_counter() - started) * 1000)
     base = {
         "model": MODEL_NAME,
         "threshold": MATCH_THRESHOLD,
         "processing_time_ms": elapsed,
-        "face_count": face_count,
+        "face_count": stats["frames_used"],
         "database_size": len(docs),
+        **stats,
     }
 
-    vectors, valid = [], []
-    for doc in docs:
-        try:
-            vec = np.asarray(doc["faceData"]["embeddings"], dtype=np.float32)
-        except Exception:
-            # a corrupted/legacy embedding must never break the whole scan
-            logger.warning("skipping bad embedding for student %s", doc.get("studentId"))
-            continue
-        if vec.ndim != 1 or vec.size != query.size:
-            continue
-        n = float(np.linalg.norm(vec))
-        if n == 0:
-            continue
-        vectors.append(vec / n)
-        valid.append(doc)
-
-    if not valid:
+    if matrix is None or not docs:
         return {**base, "matched": False, "confidence": 0.0, "best": None, "candidates": [], "reason": "no_faces_registered"}
 
-    sims = np.stack(vectors) @ query
-    order = np.argsort(sims)[::-1][: max(req.top_k, 1)]
-    candidates = [_candidate(valid[i], float(min(max(sims[i], 0.0), 1.0))) for i in order]
+    # cosine similarity of the query against every template, max-pooled per student
+    sims = matrix @ query
+    per_doc = np.full(len(docs), -1.0, dtype=np.float32)
+    np.maximum.at(per_doc, owners, sims)
 
-    best_sim = float(sims[order[0]])
-    confidence = float(min(max(best_sim, 0.0), 1.0))
-    matched = bool(best_sim >= MATCH_THRESHOLD)
+    order = np.argsort(per_doc)[::-1][: max(req.top_k, 1)]
+    ranked = [int(i) for i in order]
+    candidates = [
+        _candidate(docs[i], float(min(max(per_doc[i], 0.0), 1.0))) for i in ranked
+    ]
+
+    confidence = float(min(max(per_doc[ranked[0]], 0.0), 1.0))
+    runner_up = float(per_doc[ranked[1]]) if len(ranked) > 1 else -1.0
+    margin = float(min(max(confidence - runner_up, 0.0), 1.0))
+
+    if confidence < MATCH_THRESHOLD:
+        reason = "below_threshold"
+    elif margin < MIN_MARGIN:
+        reason = "ambiguous"
+    else:
+        reason = "matched"
 
     return {
         **base,
-        "matched": matched,
+        "matched": reason == "matched",
         "confidence": round(confidence, 4),
+        "margin": round(margin, 4),
         "best": candidates[0] if candidates else None,
         "candidates": candidates,
-        "reason": "matched" if matched else "below_threshold",
+        "reason": reason,
     }
 
 
@@ -347,20 +572,35 @@ def register(req: RegisterRequest):
 
 
 def _register_impl(req: RegisterRequest):
-    frame = decode_image(req.image)
-    embedding, face_count = embed(frame)
+    frames = decode_frames(req)
+    embedding, per_frame, stats = embed_frames(frames)
+
+    # keep a few distinct templates instead of one grab - matching then takes the
+    # best hit across them, which is the single biggest accuracy lever
+    templates = [embedding]
+    for vec, _weight in sorted(per_frame, key=lambda item: -item[1]):
+        if len(templates) >= MAX_TEMPLATES:
+            break
+        if all(float(vec @ np.asarray(t, dtype=np.float32)) < TEMPLATE_DEDUP for t in templates):
+            templates.append(vec)
+    template_list = [[round(float(v), 8) for v in t] for t in templates]
 
     FACES_DIR.mkdir(parents=True, exist_ok=True)
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", req.student_id)[:40] or "student"
     filename = f"{safe_id}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}.jpg"
-    if not cv2.imwrite(str(FACES_DIR / filename), frame):
+    if not cv2.imwrite(str(FACES_DIR / filename), frames[0]):
         raise HTTPException(status_code=500, detail={"code": "save_failed", "message": "Could not save face image"})
+
+    # new enrollments invalidate the cached gallery immediately
+    _GALLERY["loaded"] = False
 
     return {
         "embedding": embedding.tolist(),
+        "templates": template_list,
         "reference_image_url": f"/uploads/faces/{filename}",
         "model": MODEL_NAME,
-        "face_count": face_count,
+        "face_count": stats["frames_used"],
+        **stats,
         "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 

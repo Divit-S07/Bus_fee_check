@@ -26,6 +26,9 @@ app.use(cors({
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW),
   max: parseInt(process.env.RATE_LIMIT_MAX),
+  // the auto face-scan loop polls /detect about once a second - it is a local,
+  // read-only check, so it must not eat the shared API budget
+  skip: (req) => req.originalUrl.split('?')[0] === '/api/v1/face/detect',
 });
 app.use('/api', limiter);
 

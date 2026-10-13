@@ -10,9 +10,17 @@ jspm_packages/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*
 *.env
 !.env.example
 !.env.*.example
+
+# Secrets & keys (defense in depth - real config belongs in .env)
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
 
 # Build outputs
 dist/
@@ -21,6 +29,14 @@ build/
 **/build/
 out/
 .next/
+
+# Test & coverage output
+coverage/
+*.lcov
+.nyc_output/
+htmlcov/
+.coverage
+.coverage.*
 
 # Logs
 logs/
@@ -32,6 +48,7 @@ lerna-debug.log*
 
 # Editor & OS files
 .vscode/*
+!.vscode/settings.json
 !.vscode/extensions.json
 .idea/
 *.suo
@@ -41,20 +58,57 @@ lerna-debug.log*
 *.sw?
 .DS_Store
 Thumbs.db
+desktop.ini
+*.stackdump
+__MACOSX/
+._*
 
-# Cache & Temporary files
+# Editor backups, caches & temp files
+*.bak
+*.orig
+*.save
+*~
 .cache/
 .eslintcache
 .vite/
 *.tmp
+*.local
 
 # Python - local face AI service (ai-service/)
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
 venv/
+.eggs/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
 
-# Uploaded receipts & captured face photos (per-user data, never in git)
+# DeepFace / OpenCV model weights - downloaded once into ~/.deepface/weights,
+# outside this repo. Never commit the binaries here either.
+*.onnx
+*.h5
+*.pth
+*.pt
+*.tflite
+*.caffemodel
+*.pb
+**/.deepface/
+
+# Local database exports (mongo dumps, bson, sqlite scratch files)
+dump/
+*.bson
+*.sqlite
+*.sqlite3
+
+# Uploaded receipts & captured face photos (per-user data, never in git).
+# Face photos are now stored in MongoDB (FaceRecognitionLog.capturedImage);
+# backend/uploads/faces/ only holds legacy captures from older runs.
 backend/uploads/
+
+# OpenCode agent tooling (.opencode/) - its own .gitignore already excludes the
+# package metadata and node_modules; design docs under .opencode/plans/ are
+# deliberately left trackable (e.g. esp32-camera-proxy.md).

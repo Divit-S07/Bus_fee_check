@@ -9,6 +9,7 @@ import {
   WarningOutlined,
   BarChartOutlined,
   ScanOutlined,
+  UsergroupDeleteOutlined,
 } from '@ant-design/icons';
 
 const NAV_ITEMS = [
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { key: '/face-scan', icon: <ScanOutlined />,       label: 'Face Scan' },
   { key: '/travels',   icon: <FileTextOutlined />,   label: 'Travel Records' },
   { key: '/unpaid',    icon: <WarningOutlined />,    label: 'Unpaid Travels' },
+  { key: '/unknown-faces', icon: <UsergroupDeleteOutlined />, label: 'Unknown Faces' },
   { key: '/reports',   icon: <BarChartOutlined />,   label: 'Reports' },
 ];
 

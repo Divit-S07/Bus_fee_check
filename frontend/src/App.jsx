@@ -10,6 +10,7 @@ import Students from './pages/Students';
 import Buses from './pages/Buses';
 import TravelRecords from './pages/TravelRecords';
 import UnpaidTravels from './pages/UnpaidTravels';
+import UnknownFaces from './pages/UnknownFaces';
 import Reports from './pages/Reports';
 import FaceScan from './pages/FaceScan';
 
@@ -129,6 +130,7 @@ const App = () => (
             <Route path="buses"     element={<Buses />} />
             <Route path="travels"   element={<TravelRecords />} />
             <Route path="unpaid"    element={<UnpaidTravels />} />
+            <Route path="unknown-faces" element={<UnknownFaces />} />
             <Route path="reports"   element={<Reports />} />
             <Route path="face-scan" element={<FaceScan />} />
           </Route>

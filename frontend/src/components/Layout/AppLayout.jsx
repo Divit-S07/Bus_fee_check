@@ -18,6 +18,7 @@ const PAGE_TITLES = {
   '/buses':     { title: 'Buses',          subtitle: 'Fleet management and route details' },
   '/travels':   { title: 'Travel Records', subtitle: 'All boarding logs and travel history' },
   '/unpaid':    { title: 'Unpaid Travels', subtitle: 'Flagged trips requiring resolution' },
+  '/unknown-faces': { title: 'Unknown Faces', subtitle: 'Unrecognised people captured by the scanner' },
   '/reports':   { title: 'Reports',        subtitle: 'Analytics and compliance summaries' },
 };
 
