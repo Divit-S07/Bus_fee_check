@@ -112,3 +112,18 @@ backend/uploads/
 # OpenCode agent tooling (.opencode/) - its own .gitignore already excludes the
 # package metadata and node_modules; design docs under .opencode/plans/ are
 # deliberately left trackable (e.g. esp32-camera-proxy.md).
+
+# Runtime ESP32-CAM address saved from the UI (machine-specific, not shared)
+backend/.esp32-camera.json
+
+# Archives and compressed files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Agent & scratch folders
+.freebuff/
+

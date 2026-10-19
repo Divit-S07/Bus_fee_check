@@ -9,6 +9,7 @@ const webhookRoutes = require('./webhook.routes');
 const analyticsRoutes = require('./analytics.routes');
 const receiptRoutes = require('./receipt.routes');
 const faceRoutes = require('./face.routes');
+const esp32Routes = require('./esp32.routes');
 
 const router = express.Router();
 router.use('/auth', authRoutes);
@@ -21,5 +22,6 @@ router.use('/webhook', webhookRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/receipts', receiptRoutes);
 router.use('/face', faceRoutes);
+router.use('/esp32', esp32Routes);
 
 module.exports = router;

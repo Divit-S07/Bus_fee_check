@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Empty,
+  Input,
   List,
   Segmented,
   Select,
@@ -33,15 +34,19 @@ import api from '../api/client';
 
 /* =========================================================
    ESP32-CAM SETTINGS
+
+   The camera is proxied by the Node backend (/api/v1/esp32/*) - the
+   browser never talks to the ESP32 directly (CORS + mixed endpoints).
+   Camera IP lives in backend/.env as ESP32_CAM_URL.
    ========================================================= */
 
-const ESP32_CAM_URL =
-  import.meta.env.VITE_ESP32_CAM_URL ||
-  'http://10.67.1.56/';
+const API_ORIGIN =
+  (import.meta.env.VITE_API_URL || '')
+    .replace(/\/api\/v1\/?$/, '');
 
-const ESP32_STREAM_URL =
-  import.meta.env.VITE_ESP32_CAM_STREAM_URL ||
-  'http://10.67.1.56:81/stream';
+const ESP32_STREAM_URL = `${API_ORIGIN}/api/v1/esp32/stream`;
+const ESP32_CAPTURE_URL = `${API_ORIGIN}/api/v1/esp32/capture`;
+const ESP32_HEALTH_URL = `${API_ORIGIN}/api/v1/esp32/health`;
 
 /* =========================================================
    IMAGE / SCAN SETTINGS
@@ -75,10 +80,6 @@ const CONF = (c) =>
   typeof c === 'number'
     ? `${(c * 100).toFixed(1)}%`
     : '-';
-
-const API_ORIGIN =
-  (import.meta.env.VITE_API_URL || '')
-    .replace(/\/api\/v1\/?$/, '');
 
 const mediaUrl = (url) =>
   !url
@@ -147,6 +148,15 @@ const FaceScan = () => {
   const [cameraError, setCameraError] =
     useState('');
 
+  // bumped to remount the <img> when reconnecting to the proxy
+  const [streamKey, setStreamKey] = useState(0);
+  const streamRetryRef = useRef(null);
+
+  // camera address controls (ESP32-CAM IP can change - no .env edit needed)
+  const [cameraUrl, setCameraUrl] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [cameraMsg, setCameraMsg] = useState('');
+
   /* =======================================================
      REFS
      ======================================================= */
@@ -168,7 +178,62 @@ const FaceScan = () => {
     fetchBuses();
     fetchStudents();
     checkAi();
+    loadCameraConfig();
   }, []);
+
+  /* =======================================================
+     CAMERA ADDRESS (runtime config + LAN discovery)
+     ======================================================= */
+
+  const loadCameraConfig = async () => {
+    try {
+      const res = await api.get('/esp32/config');
+      setCameraUrl(res.data?.url || '');
+    } catch (e) {
+      // non-fatal - the field just stays empty
+    }
+  };
+
+  const findCamera = async () => {
+    setScanning(true);
+    setCameraMsg('');
+    try {
+      const res = await api.get('/esp32/scan');
+      const found = res.data?.candidates || [];
+      if (found.length === 1) {
+        setCameraUrl(found[0].url);
+        setCameraMsg(`Found camera at ${found[0].url} - click Apply.`);
+      } else if (found.length > 1) {
+        setCameraUrl(found[0].url);
+        setCameraMsg(
+          `Found ${found.length} candidates: ${found.map((c) => c.url).join(', ')} - using ${found[0].url}. Click Apply.`
+        );
+      } else {
+        setCameraMsg('No camera found on the local network. Check power / Wi-Fi.');
+      }
+    } catch (e) {
+      setCameraMsg(e.response?.data?.message || e.message || 'Scan failed');
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const applyCamera = async () => {
+    setCameraMsg('');
+    setCameraError('');
+    try {
+      const res = await api.post('/esp32/config', { url: cameraUrl });
+      setCameraUrl(res.data?.url || cameraUrl);
+      setCameraMsg(`Camera set to ${res.data?.url}. Reconnecting…`);
+      if (cameraOn) {
+        setStreamLoading(true);
+        setStreamReady(false);
+        setStreamKey((k) => k + 1);
+      }
+    } catch (e) {
+      setCameraMsg(e.response?.data?.message || e.message || 'Could not set camera');
+    }
+  };
 
   /* =======================================================
      AI STATUS
@@ -235,19 +300,26 @@ const FaceScan = () => {
   ) => {
     try {
       /*
-       * AI-Thinker CameraWebServer still endpoint
+       * Backend proxy - tries every still endpoint on the ESP32 and
+       * falls back to grabbing one frame off the MJPEG stream.
        */
-      const captureUrl =
-        `${ESP32_CAM_URL.replace(/\/$/, '')}/capture`;
-
       const response = await fetch(
-        captureUrl,
+        `${ESP32_CAPTURE_URL}?t=${Date.now()}`,
         {
           cache: 'no-store',
         }
       );
 
       if (!response.ok) {
+        const detail = await response
+          .json()
+          .catch(() => null);
+
+        console.warn(
+          'ESP32 capture failed:',
+          detail?.message || response.status
+        );
+
         return null;
       }
 
@@ -538,8 +610,82 @@ const FaceScan = () => {
   };
 
   /* =======================================================
-     AI STATUS
-     ======================================================= */
+      CAMERA + ESP32 HEALTH
+      ======================================================= */
+
+  // asks the backend which ESP32 endpoints answer and turns the
+  // probe into a human-readable message
+  const probeCamera = async () => {
+    try {
+      const res = await fetch(ESP32_HEALTH_URL, {
+        cache: 'no-store',
+      });
+
+      const probe = await res.json().catch(() => null);
+
+      if (probe?.esp32 === 'online') {
+        return '';
+      }
+
+      const stillOk = probe?.still
+        ? Object.entries(probe.still)
+            .filter(([, ok]) => ok)
+            .map(([path]) => path)
+        : [];
+
+      return (
+        `ESP32-CAM offline at ${probe?.base || 'camera'} - ` +
+        (stillOk.length
+          ? `still endpoints ok but no stream (${stillOk.join(', ')})`
+          : 'no still or stream endpoint responded') +
+        '. Check power / ESP32_CAM_URL in backend/.env'
+      );
+    } catch {
+      return 'Cannot reach backend proxy - is the Node server running?';
+    }
+  };
+
+  const startCamera = () => {
+    if (streamRetryRef.current) {
+      clearTimeout(streamRetryRef.current);
+      streamRetryRef.current = null;
+    }
+
+    setCameraError('');
+    setStreamKey((k) => k + 1);
+    setCameraOn(true);
+
+    // Non-blocking health probe: checks camera in background without delaying video display
+    probeCamera().then((err) => {
+      if (err) setCameraError(err);
+    });
+  };
+
+  // the <img> died mid-stream - show a brief message then auto-reconnect
+  const handleStreamError = () => {
+    setCameraError('Camera stream interrupted. Reconnecting in 3 seconds...');
+
+    if (streamRetryRef.current) clearTimeout(streamRetryRef.current);
+    streamRetryRef.current = setTimeout(() => {
+      streamRetryRef.current = null;
+      setStreamKey((k) => k + 1);
+      setCameraError('');
+    }, 3000);
+  };
+
+  // Clean up retry timer when camera is turned off
+  const stopCamera = () => {
+    if (streamRetryRef.current) {
+      clearTimeout(streamRetryRef.current);
+      streamRetryRef.current = null;
+    }
+    setCameraOn(false);
+    setCameraError('');
+  };
+
+  /* =======================================================
+      AI STATUS
+      ======================================================= */
 
   const aiOffline =
     ai && ai.ai === 'offline';
@@ -618,6 +764,8 @@ const FaceScan = () => {
           ) > 0;
 
         if (!present) {
+          // No face detected – clear previous result to prevent showing old face data
+          setResult(null);
           absentRef.current += 1;
 
           if (
@@ -911,10 +1059,7 @@ const FaceScan = () => {
               icon={
                 <StopOutlined />
               }
-              onClick={() => {
-                setCameraOn(false);
-                setCameraError('');
-              }}
+              onClick={stopCamera}
             >
               Stop Camera
             </Button>
@@ -924,10 +1069,7 @@ const FaceScan = () => {
               icon={
                 <CameraOutlined />
               }
-              onClick={() => {
-                setCameraError('');
-                setCameraOn(true);
-              }}
+              onClick={startCamera}
             >
               Start Camera
             </Button>
@@ -970,6 +1112,16 @@ const FaceScan = () => {
             marginBottom: 16,
           }}
           message={cameraError}
+          action={
+            cameraOn ? (
+              <Button
+                size="small"
+                onClick={startCamera}
+              >
+                Retry stream
+              </Button>
+            ) : null
+          }
         />
       )}
 
@@ -1045,15 +1197,13 @@ const FaceScan = () => {
                 : '2px dashed rgba(165,180,252,0.7)',
             }}
           >
-            {cameraOn ? (
+            {/* Live ESP32-CAM MJPEG Stream */}
+            {cameraOn && (
               <img
-                src={ESP32_STREAM_URL}
+                key={streamKey}
+                src={`${ESP32_STREAM_URL}?t=${streamKey}`}
                 alt="ESP32-CAM Live Stream"
-                onError={() => {
-                  setCameraError(
-                    `Cannot connect to ESP32-CAM stream: ${ESP32_STREAM_URL}`
-                  );
-                }}
+                onError={handleStreamError}
                 style={{
                   width: '100%',
                   height: '100%',
@@ -1061,7 +1211,10 @@ const FaceScan = () => {
                   display: 'block',
                 }}
               />
-            ) : (
+            )}
+
+            {/* Camera-off placeholder */}
+            {!cameraOn && (
               <div
                 style={{
                   color: '#94a3b8',
@@ -1085,18 +1238,90 @@ const FaceScan = () => {
               </div>
             )}
 
-            {/* FACE GUIDE */}
-
-            <div
-              style={{
-                position: 'absolute',
-                inset: '8% 22%',
-                border:
-                  '2px dashed rgba(165,180,252,0.7)',
-                borderRadius: '50%',
-                pointerEvents: 'none',
-              }}
-            />
+            {/* Real-time Face Detection Guide Oval and Status Pill */}
+            {cameraOn && (
+              <>
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: '8% 22%',
+                    border: `2px ${
+                      auto === 'scanning'
+                        ? 'solid #06b6d4'
+                        : result?.status === 'paid_ignored'
+                        ? 'solid #10b981'
+                        : result?.status === 'unpaid_recorded'
+                        ? 'solid #ef4444'
+                        : result?.status === 'low_confidence' || result?.status === 'unidentified'
+                        ? 'solid #f59e0b'
+                        : 'dashed rgba(165,180,252,0.8)'
+                    }`,
+                    borderRadius: '50%',
+                    pointerEvents: 'none',
+                    boxShadow:
+                      auto === 'scanning'
+                        ? '0 0 20px rgba(6, 182, 212, 0.5)'
+                        : result?.status === 'paid_ignored'
+                        ? '0 0 20px rgba(16, 185, 129, 0.5)'
+                        : result?.status === 'unpaid_recorded'
+                        ? '0 0 20px rgba(239, 68, 68, 0.5)'
+                        : 'none',
+                    transition: 'all 0.3s ease',
+                  }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: 12,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'rgba(15, 23, 42, 0.85)',
+                    backdropFilter: 'blur(4px)',
+                    color:
+                      auto === 'scanning'
+                        ? '#38bdf8'
+                        : result?.status === 'paid_ignored'
+                        ? '#34d399'
+                        : result?.status === 'unpaid_recorded'
+                        ? '#f87171'
+                        : '#e2e8f0',
+                    padding: '4px 14px',
+                    borderRadius: 20,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    pointerEvents: 'none',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      background:
+                        auto === 'scanning'
+                          ? '#38bdf8'
+                          : result?.status === 'paid_ignored'
+                          ? '#34d399'
+                          : result?.status === 'unpaid_recorded'
+                          ? '#f87171'
+                          : '#94a3b8',
+                      display: 'inline-block',
+                    }}
+                  />
+                  {auto === 'scanning'
+                    ? 'Scanning face...'
+                    : auto === 'waiting'
+                    ? 'Person seen'
+                    : result?.student
+                    ? `${result.student.firstName} ${result.student.lastName}`
+                    : 'Looking for a face...'}
+                </div>
+              </>
+            )}
           </div>
 
           {/* BUS SELECT */}
@@ -1109,6 +1334,50 @@ const FaceScan = () => {
               marginTop: 14,
             }}
           >
+            <div>
+              <div
+                style={{
+                  fontSize: 12,
+                  marginBottom: 6,
+                }}
+              >
+                Camera address (ESP32-CAM)
+              </div>
+              <Space.Compact style={{ width: '100%' }}>
+                <Input
+                  value={cameraUrl}
+                  onChange={(e) => setCameraUrl(e.target.value)}
+                  placeholder="http://192.168.1.50"
+                  allowClear
+                />
+                <Button
+                  onClick={findCamera}
+                  loading={scanning}
+                  icon={<ReloadOutlined />}
+                >
+                  Find camera
+                </Button>
+                <Button
+                  type="primary"
+                  onClick={applyCamera}
+                  disabled={!cameraUrl}
+                >
+                  Apply
+                </Button>
+              </Space.Compact>
+              {cameraMsg && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    marginTop: 6,
+                    color: 'var(--color-text-muted)',
+                  }}
+                >
+                  {cameraMsg}
+                </div>
+              )}
+            </div>
+
             {mode === 'scan' ? (
               <div>
                 <div

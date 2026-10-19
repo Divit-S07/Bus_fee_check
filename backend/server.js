@@ -26,9 +26,20 @@ app.use(cors({
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW),
   max: parseInt(process.env.RATE_LIMIT_MAX),
-  // the auto face-scan loop polls /detect about once a second - it is a local,
-  // read-only check, so it must not eat the shared API budget
-  skip: (req) => req.originalUrl.split('?')[0] === '/api/v1/face/detect',
+  // the auto face-scan loop polls these every second - they are local,
+  // read-only checks and must not eat the shared API budget:
+  //   /face/detect  - YuNet presence check
+  //   /esp32/*      - camera proxy (capture ~1/s while scanning, stream is one
+  //                   long-lived request, health is polled on Start Camera)
+  skip: (req) => {
+    const p = req.originalUrl.split('?')[0];
+    return (
+      p === '/api/v1/face/detect' ||
+      p === '/api/v1/esp32/health' ||
+      p === '/api/v1/esp32/capture' ||
+      p === '/api/v1/esp32/stream'
+    );
+  },
 });
 app.use('/api', limiter);
 

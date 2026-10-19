@@ -80,11 +80,19 @@ def _db_name(uri: str, fallback: str = "bus-fee-system") -> str:
 
 
 def _default_threshold(model_name: str) -> float:
-    """DeepFace stores thresholds as cosine *distance*; we compare similarity."""
+    """DeepFace stores thresholds as cosine *distance*; we compare similarity.
+
+    DeepFace's published operating point (1 - cosine) is tuned for clean lab
+    photos. ESP32-CAM frames are low-res, JPEG-compressed and often motion
+    blurred, which pushes *different* people above that loose line - the
+    classic "everyone matches the same student" failure. Floor the default at
+    0.55 similarity; override with FACE_MATCH_THRESHOLD if needed.
+    """
+    floor = 0.65
     entry = deepface_thresholds.get(model_name)
     if entry and "cosine" in entry:
-        return round(1.0 - float(entry["cosine"]), 3)
-    return 0.7
+        return round(max(1.0 - float(entry["cosine"]), floor), 3)
+    return floor
 
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/bus-fee-system")
@@ -114,8 +122,19 @@ MIN_DET_CONF = 0.0 if not ENFORCE_DETECTION else float(os.getenv("FACE_MIN_DET_C
 MIN_BLUR = float(os.getenv("FACE_MIN_BLUR", "25"))
 # pad the detected box before cropping - SFace is sensitive to tight crops
 EXPAND_PCT = int(os.getenv("FACE_EXPAND_PERCENTAGE", "15"))
-# best-vs-runner-up cosine gap required to accept a match (kills near-ties)
-MIN_MARGIN = float(os.getenv("FACE_MIN_MARGIN", "0.04"))
+# best-vs-runner-up cosine gap required to accept a match (kills near-ties).
+# 0.04 let near-identical scores through whenever two enrolled students were
+# both "sort of" similar - raised to 0.06 so a coin-flip never books a ride.
+MIN_MARGIN = float(os.getenv("FACE_MIN_MARGIN", "0.06"))
+# reject detections smaller than this (longest side, in pixels of the processed
+# frame). ESP32 wide shots put 30-px faces in the corner - their embeddings are
+# noise and noise matches whoever is closest in the gallery.
+MIN_FACE_PX = int(os.getenv("FACE_MIN_FACE_PX", "80"))
+# per-frame consensus: when several frames are fused, this fraction of the
+# individual frames must independently pick the same best student. Frames of
+# different people (or one clear + one blurred frame) then reject instead of
+# averaging into a false match.
+CONSENSUS_MIN = float(os.getenv("FACE_CONSENSUS_MIN", "0.5"))
 # frames per scan / per enrollment, and how many templates are kept per student
 MAX_FRAMES = max(1, int(os.getenv("FACE_MAX_FRAMES", "5")))
 MAX_TEMPLATES = max(1, int(os.getenv("FACE_MAX_TEMPLATES", "4")))
@@ -272,10 +291,15 @@ def embed_frames(frames: List[np.ndarray]):
         det = float(rep.get("face_confidence") or 0.0)
         if det < MIN_DET_CONF:
             continue
+        area = rep.get("facial_area") or {}
+        # a postage-stamp face crop is pure noise for SFace - drop it before it
+        # can drag the fused query toward a random student
+        if max(int(area.get("w", 0)), int(area.get("h", 0))) < MIN_FACE_PX:
+            continue
         vec = _unit(rep.get("embedding"))
         if vec is None:
             continue
-        sharp = _sharpness(frame, rep.get("facial_area") or {})
+        sharp = _sharpness(frame, area)
         weight = det * min(1.0, sharp / sharp_ref)
         usable.append((vec, max(weight, 1e-3), sharp, det))
 
@@ -540,8 +564,8 @@ def _match_impl(req: ImageRequest):
     ]
 
     confidence = float(min(max(per_doc[ranked[0]], 0.0), 1.0))
-    runner_up = float(per_doc[ranked[1]]) if len(ranked) > 1 else -1.0
-    margin = float(min(max(confidence - runner_up, 0.0), 1.0))
+    runner_up = float(per_doc[ranked[1]]) if len(ranked) > 1 else 0.0
+    margin = float(min(max(confidence - runner_up, 0.0), 1.0)) if len(ranked) > 1 else 1.0
 
     if confidence < MATCH_THRESHOLD:
         reason = "below_threshold"
@@ -581,7 +605,10 @@ def _register_impl(req: RegisterRequest):
     for vec, _weight in sorted(per_frame, key=lambda item: -item[1]):
         if len(templates) >= MAX_TEMPLATES:
             break
-        if all(float(vec @ np.asarray(t, dtype=np.float32)) < TEMPLATE_DEDUP for t in templates):
+        if (
+            float(vec @ np.asarray(embedding, dtype=np.float32)) >= 0.60
+            and all(float(vec @ np.asarray(t, dtype=np.float32)) < TEMPLATE_DEDUP for t in templates)
+        ):
             templates.append(vec)
     template_list = [[round(float(v), 8) for v in t] for t in templates]
 
