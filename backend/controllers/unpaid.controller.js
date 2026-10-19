@@ -6,7 +6,7 @@ exports.getUnpaidTravels = async (req, res) => {
   if (resolved !== undefined) filter.resolved = resolved === 'true';
   if (studentId) filter.studentId = studentId;
   const unpaid = await UnpaidTravel.find(filter)
-    .populate('studentId', 'firstName lastName studentId')
+    .populate('studentId', 'firstName lastName studentId photoUrl faceData')
     .populate('busId', 'busNumber')
     .sort({ timestamp: -1 });
   res.json(unpaid);

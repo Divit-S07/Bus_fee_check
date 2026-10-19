@@ -86,6 +86,10 @@ exports.uploadReceipts = async (req, res) => {
           if (duplicate) {
             student = duplicate;
             method = 'studentId';
+            if (studentPhoto && (!student.photoUrl || student.photoUrl.trim() === '')) {
+              student.photoUrl = studentPhoto.dataUrl;
+              await student.save();
+            }
           } else {
             if (studentPhoto) {
               doc.photoUrl = studentPhoto.dataUrl;
@@ -128,11 +132,12 @@ exports.uploadReceipts = async (req, res) => {
         if (created) {
           // New student: full record already saved above (paid, route, fee, photo)
         } else {
-          // Existing student: only update fee status and bus route
+          // Existing student: update fee status, bus route, and photo if available
           student.paymentStatus = 'paid';
           if (parsed.busRoute) student.busRoute = parsed.busRoute;
-          // store the extracted photo only if the student doesn't have one yet
-          if (studentPhoto && !student.photoUrl) student.photoUrl = studentPhoto.dataUrl;
+          if (studentPhoto && (!student.photoUrl || student.photoUrl.trim() === '')) {
+            student.photoUrl = studentPhoto.dataUrl;
+          }
           await student.save();
         }
 

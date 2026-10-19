@@ -18,7 +18,7 @@ exports.getAllTravels = async (req, res) => {
     }
   }
   const travels = await TravelRecord.find(filter)
-    .populate('studentId', 'firstName lastName studentId')
+    .populate('studentId', 'firstName lastName studentId photoUrl faceData')
     .populate('busId', 'busNumber')
     .sort({ timestamp: -1 })
     .skip((page - 1) * limit)

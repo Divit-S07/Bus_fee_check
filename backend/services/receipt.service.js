@@ -384,7 +384,190 @@ const cropRegion = async (buffer, region) => {
   return { buffer: out, contentType: 'image/jpeg', dataUrl: `data:image/jpeg;base64,${out.toString('base64')}` };
 };
 
-// 1) Face detection — crop the face (with margin so the box border is included)
+// ---------------------------------------------------------------------------
+// Student Photo Extraction from Receipt
+// College receipts place the student passport photo in the TOP-RIGHT corner
+// enclosed within a rectangular frame.
+// Strategy:
+//   1. Focus specifically on the TOP-RIGHT quadrant / corner (ROI)
+//   2. Method A: Detect the passport photo rectangular box / frame in the top-right
+//   3. Method B: Detect face inside the top-right ROI and crop passport portrait
+//   4. Method C: Scan for high-density non-white photo component in top-right
+//   5. Fallback: Full-page face detection and full-page box detection
+// ---------------------------------------------------------------------------
+
+// 1) Top-Right Rectangle Box / Frame Detection
+const detectTopRightBoxPhoto = async (raster) => {
+  try {
+    const sharp = require('sharp');
+    const meta = await sharp(raster.buffer).metadata();
+    if (!meta.width || !meta.height) return null;
+    const W = meta.width;
+    const H = meta.height;
+
+    // Focus on Top-Right Quadrant (where student photos sit on fee receipts)
+    const roiX = Math.round(W * 0.50);
+    const roiY = Math.round(H * 0.06);
+    const roiW = W - roiX;
+    const roiH = Math.round(H * 0.46);
+
+    if (roiW < 60 || roiH < 60) return null;
+
+    const roiBuffer = await sharp(raster.buffer)
+      .extract({ left: roiX, top: roiY, width: roiW, height: roiH })
+      .toBuffer();
+
+    const { data: greyData } = await sharp(roiBuffer)
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    // White paper background is typically > 235
+    const isDark = (v) => v < 235;
+    const candidates = [];
+
+    // Search for rectangular borders
+    const step = 2;
+    for (let top = 10; top < roiH - 60; top += step) {
+      for (let left = 15; left < roiW - 60; left += step) {
+        let hLen = 0;
+        while (left + hLen < roiW && isDark(greyData[top * roiW + left + hLen])) {
+          hLen++;
+        }
+        if (hLen < 50 || hLen > roiW * 0.9) continue;
+
+        let vLen = 0;
+        while (top + vLen < roiH && isDark(greyData[(top + vLen) * roiW + left])) {
+          vLen++;
+        }
+        if (vLen < 50 || vLen > roiH * 0.9) continue;
+
+        const aspect = hLen / vLen;
+        // Standard passport / portrait aspect ratio (width / height ~ 0.55 to 1.35)
+        if (aspect >= 0.55 && aspect <= 1.35) {
+          candidates.push({ left, top, width: hLen, height: vLen, aspect });
+        }
+      }
+    }
+
+    if (candidates.length > 0) {
+      // Sort candidates by preference for typical passport ratio (~0.75 - 0.8) and larger area
+      candidates.sort((a, b) => {
+        const scoreA = (a.width * a.height) * (1 - Math.abs(a.aspect - 0.78));
+        const scoreB = (b.width * b.height) * (1 - Math.abs(b.aspect - 0.78));
+        return scoreB - scoreA;
+      });
+
+      const best = candidates[0];
+      const origLeft = Math.max(0, roiX + best.left);
+      const origTop = Math.max(0, roiY + best.top);
+      const origWidth = Math.min(W - origLeft, best.width);
+      const origHeight = Math.min(H - origTop, best.height);
+
+      const out = await sharp(raster.buffer)
+        .extract({ left: origLeft, top: origTop, width: origWidth, height: origHeight })
+        .jpeg({ quality: 92 })
+        .toBuffer();
+
+      return {
+        buffer: out,
+        contentType: 'image/jpeg',
+        dataUrl: 'data:image/jpeg;base64,' + out.toString('base64'),
+      };
+    }
+
+    return null;
+  } catch (err) {
+    return null;
+  }
+};
+
+// 2) Top-Right Face Detection
+const detectTopRightFacePhoto = async (raster) => {
+  try {
+    const sharp = require('sharp');
+    const meta = await sharp(raster.buffer).metadata();
+    if (!meta.width || !meta.height) return null;
+    const W = meta.width;
+    const H = meta.height;
+
+    const roiX = Math.round(W * 0.50);
+    const roiY = Math.round(H * 0.06);
+    const roiW = W - roiX;
+    const roiH = Math.round(H * 0.46);
+
+    const roiBuffer = await sharp(raster.buffer)
+      .extract({ left: roiX, top: roiY, width: roiW, height: roiH })
+      .toBuffer();
+
+    const fa = await getFaceApi();
+    const targetW = 416;
+    const targetH = Math.round((roiH * targetW) / roiW);
+
+    const { data: rawData, info } = await sharp(roiBuffer)
+      .resize(targetW, targetH)
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    let rgb;
+    if (info.channels === 3) {
+      rgb = new Uint8Array(rawData.buffer, rawData.byteOffset, rawData.length);
+    } else {
+      rgb = new Uint8Array(targetW * targetH * 3);
+      for (let i = 0; i < targetW * targetH; i++) {
+        rgb[i * 3] = rawData[i];
+        rgb[i * 3 + 1] = rawData[i];
+        rgb[i * 3 + 2] = rawData[i];
+      }
+    }
+
+    const tensor = fa.tf.tensor3d(rgb, [targetH, targetW, 3], 'int32');
+    let detections;
+    try {
+      detections = await fa.detectAllFaces(
+        tensor,
+        new fa.TinyFaceDetectorOptions({ inputSize: 416, threshold: 0.15 })
+      );
+    } finally {
+      fa.tf.dispose(tensor);
+    }
+
+    if (!detections || !detections.length) return null;
+
+    const det = detections.sort((a, b) => (b.score || 1) - (a.score || 1))[0];
+    const scale = targetW / roiW;
+    const faceX = roiX + det.box.x / scale;
+    const faceY = roiY + det.box.y / scale;
+    const faceW = det.box.width / scale;
+    const faceH = det.box.height / scale;
+
+    const photoH = faceH * 2.3;
+    const photoW = photoH * 0.78;
+    const photoX = Math.max(0, Math.min(W - photoW, faceX + faceW / 2 - photoW / 2));
+    const photoY = Math.max(0, Math.min(H - photoH, faceY + faceH * 0.42 - photoH * 0.45));
+
+    const out = await sharp(raster.buffer)
+      .extract({
+        left: Math.round(photoX),
+        top: Math.round(photoY),
+        width: Math.round(photoW),
+        height: Math.round(photoH),
+      })
+      .jpeg({ quality: 92 })
+      .toBuffer();
+
+    return {
+      buffer: out,
+      contentType: 'image/jpeg',
+      dataUrl: 'data:image/jpeg;base64,' + out.toString('base64'),
+    };
+  } catch (err) {
+    return null;
+  }
+};
+
+// 3) Full-Page Fallback Face Detection
 const detectFacePhoto = async (raster) => {
   try {
     const fa = await getFaceApi();
@@ -395,14 +578,13 @@ const detectFacePhoto = async (raster) => {
     try {
       detections = await fa.detectAllFaces(
         tensor,
-        new fa.TinyFaceDetectorOptions({ inputSize: 512, threshold: 0.4 })
+        new fa.TinyFaceDetectorOptions({ inputSize: 512, threshold: 0.25 })
       );
     } finally {
       fa.tf.dispose(tensor);
     }
     if (!detections || !detections.length) return null;
 
-    // biggest / most confident face
     const det = detections
       .slice()
       .sort(
@@ -410,10 +592,9 @@ const detectFacePhoto = async (raster) => {
           b.box.width * b.box.height * (b.score || 1) - a.box.width * a.box.height * (a.score || 1)
       )[0];
 
-    // back to original image coordinates
     const cx = (det.box.x + det.box.width / 2) / img.scaleX;
     const cy = (det.box.y + det.box.height / 2) / img.scaleY;
-    const fh = (det.box.height / img.scaleY) * 2.1; // include the photo frame around the face
+    const fh = (det.box.height / img.scaleY) * 2.1;
     const fw = fh * 0.75;
     return cropRegion(raster.buffer, { left: cx - fw / 2, top: cy - fh / 2, width: fw, height: fh });
   } catch (err) {
@@ -421,149 +602,22 @@ const detectFacePhoto = async (raster) => {
   }
 };
 
-// 2) Rectangle-box detection — find the small frame drawn around the student photo
-const detectBoxPhoto = async (raster) => {
-  try {
-    const sharp = require('sharp');
-    const meta = await sharp(raster.buffer).metadata();
-    if (!meta.width || !meta.height) return null;
-
-    const W = 480;
-    const scale = W / meta.width;
-    const H = Math.max(2, Math.round(meta.height * scale));
-    const { data } = await sharp(raster.buffer)
-      .resize(W, H)
-      .greyscale()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-
-    // edge map (gradient magnitude)
-    const edge = new Uint8Array(W * H);
-    for (let y = 1; y < H - 1; y++) {
-      for (let x = 1; x < W - 1; x++) {
-        const i = y * W + x;
-        const gx = data[i + 1] - data[i - 1];
-        const gy = data[i + W] - data[i - W];
-        if (Math.abs(gx) + Math.abs(gy) > 55) edge[i] = 1;
-      }
-    }
-
-    const maxGap = 2;
-    const minHLen = Math.max(10, Math.round(W * 0.05));
-    const minVLen = Math.max(10, Math.round(H * 0.05));
-    const hRuns = [];
-    const vRuns = [];
-
-    for (let y = 0; y < H; y++) {
-      let start = -1;
-      let gap = 0;
-      for (let x = 0; x < W; x++) {
-        if (edge[y * W + x]) {
-          if (start < 0) start = x;
-          gap = 0;
-        } else if (start >= 0) {
-          gap++;
-          if (gap > maxGap) {
-            const end = x - gap;
-            if (end - start >= minHLen) hRuns.push({ y, x0: start, x1: end });
-            start = -1;
-            gap = 0;
-          }
-        }
-      }
-      if (start >= 0 && W - start >= minHLen) hRuns.push({ y, x0: start, x1: W - 1 });
-    }
-
-    for (let x = 0; x < W; x++) {
-      let start = -1;
-      let gap = 0;
-      for (let y = 0; y < H; y++) {
-        if (edge[y * W + x]) {
-          if (start < 0) start = y;
-          gap = 0;
-        } else if (start >= 0) {
-          gap++;
-          if (gap > maxGap) {
-            const end = y - gap;
-            if (end - start >= minVLen) vRuns.push({ x, y0: start, y1: end });
-            start = -1;
-            gap = 0;
-          }
-        }
-      }
-      if (start >= 0 && H - start >= minVLen) vRuns.push({ x, y0: start, y1: H - 1 });
-    }
-
-    const tolX = Math.max(3, Math.round(W * 0.012));
-    const tolY = Math.max(3, Math.round(H * 0.012));
-    const pageArea = W * H;
-    let best = null;
-    let bestScore = 0;
-
-    for (let i = 0; i < hRuns.length; i++) {
-      for (let j = i + 1; j < hRuns.length; j++) {
-        const t = hRuns[i];
-        const b = hRuns[j];
-        if (b.y <= t.y + 4) continue;
-        const boxH = b.y - t.y;
-        if (boxH < H * 0.03 || boxH > H * 0.6) continue;
-
-        const lo = Math.max(t.x0, b.x0);
-        const hi = Math.min(t.x1, b.x1);
-        const boxW = hi - lo;
-        if (boxW < minHLen) continue;
-        const overlapRatio = boxW / Math.max(1, Math.min(t.x1 - t.x0, b.x1 - b.x0));
-        if (overlapRatio < 0.65) continue;
-
-        const aspect = boxW / boxH;
-        if (aspect < 0.5 || aspect > 1.9) continue;
-
-        // require a matching vertical border on the left AND the right → a real box
-        const leftOk = vRuns.some(
-          (v) =>
-            Math.abs(v.x - lo) <= tolX &&
-            v.y0 <= t.y + tolY &&
-            v.y1 >= b.y - tolY &&
-            v.y1 - v.y0 >= boxH * 0.7
-        );
-        const rightOk = vRuns.some(
-          (v) =>
-            Math.abs(v.x - hi) <= tolX &&
-            v.y0 <= t.y + tolY &&
-            v.y1 >= b.y - tolY &&
-            v.y1 - v.y0 >= boxH * 0.7
-        );
-        if (!leftOk || !rightOk) continue;
-
-        const areaRatio = (boxW * boxH) / pageArea;
-        if (areaRatio > 0.35 || areaRatio < 0.002) continue; // small box only
-
-        // prefer smaller, more photo-shaped boxes (3:4-ish)
-        const shapeBonus = 1 - Math.min(1, Math.abs(aspect - 0.75) / 0.75);
-        const score = overlapRatio * (1 - areaRatio) * (0.5 + 0.5 * shapeBonus);
-        if (score > bestScore) {
-          bestScore = score;
-          best = { left: lo / scale, top: t.y / scale, width: boxW / scale, height: boxH / scale };
-        }
-      }
-    }
-
-    if (!best) return null;
-    return cropRegion(raster.buffer, best);
-  } catch (err) {
-    return null;
-  }
-};
-
-// Main entry: find the student photo inside the receipt
+// Main entry: extract student photo from receipt (prioritizes top-right corner)
 const extractStudentPhoto = async (filePath, mimeType = '') => {
   try {
     const rasters = await getReceiptRasters(filePath, mimeType);
     for (const raster of rasters) {
+      // 1. High-accuracy Top-Right Box Detection
+      const byTopRightBox = await detectTopRightBoxPhoto(raster);
+      if (byTopRightBox) return byTopRightBox;
+
+      // 2. Top-Right Neural Face Detection
+      const byTopRightFace = await detectTopRightFacePhoto(raster);
+      if (byTopRightFace) return byTopRightFace;
+
+      // 3. Full-page face detection fallback
       const byFace = await detectFacePhoto(raster);
       if (byFace) return byFace;
-      const byBox = await detectBoxPhoto(raster);
-      if (byBox) return byBox;
     }
     return null;
   } catch (err) {

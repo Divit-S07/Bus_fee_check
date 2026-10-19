@@ -3,8 +3,8 @@ node_modules/
 **/node_modules/
 jspm_packages/
 
-# Environment files - NEVER commit the real ones.
-# Commit the templates instead: .env.example / .env.sample
+# Environment files - NEVER commit real credentials.
+# Commit templates instead: .env.example / .env.sample
 .env
 .env.local
 .env.development.local
@@ -45,6 +45,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+
+# Git lock files (prevent accidental commit of stale lock files)
+*.lock
+!package-lock.json
+!yarn.lock
 
 # Editor & OS files
 .vscode/*
@@ -105,13 +110,11 @@ dump/
 *.sqlite3
 
 # Uploaded receipts & captured face photos (per-user data, never in git).
-# Face photos are now stored in MongoDB (FaceRecognitionLog.capturedImage);
-# backend/uploads/faces/ only holds legacy captures from older runs.
+# Face photos and student photos are stored directly in MongoDB;
+# disk uploads directories are local-only.
+uploads/
+**/uploads/
 backend/uploads/
-
-# OpenCode agent tooling (.opencode/) - its own .gitignore already excludes the
-# package metadata and node_modules; design docs under .opencode/plans/ are
-# deliberately left trackable (e.g. esp32-camera-proxy.md).
 
 # Runtime ESP32-CAM address saved from the UI (machine-specific, not shared)
 backend/.esp32-camera.json
@@ -124,6 +127,12 @@ backend/.esp32-camera.json
 *.rar
 *.7z
 
-# Agent & scratch folders
+# AI agent, scratch and system-generated files
 .freebuff/
-
+.gemini/
+.system_generated/
+scratch/
+*_rendered*.png
+*_detected*.jpg
+*_crop*.png
+*_test*.png

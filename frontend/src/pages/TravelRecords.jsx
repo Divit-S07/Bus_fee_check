@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Card, DatePicker, Select, Button, Space, Tag, Tooltip } from 'antd';
-import { ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined, DownloadOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Table, Card, DatePicker, Select, Button, Space, Tag, Tooltip, Avatar } from 'antd';
+import { ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined, DownloadOutlined, FileTextOutlined, UserOutlined } from '@ant-design/icons';
 import api from '../api/client';
 
 const { RangePicker } = DatePicker;
@@ -55,15 +55,28 @@ const TravelRecords = () => {
       title: 'Student',
       key: 'student',
       render: (_, r) => {
-        const name = r.studentId
-          ? `${r.studentId.firstName || ''} ${r.studentId.lastName || ''}`.trim() || r.studentId.studentId
+        const student = r.studentId;
+        const name = student
+          ? `${student.firstName || ''} ${student.lastName || ''}`.trim() || student.studentId
           : 'N/A';
-        const sid = r.studentId?.studentId;
+        const sid = student?.studentId;
+        const photo = student?.photoUrl || student?.faceData?.referenceImageUrl;
+        const initials = `${student?.firstName?.[0] ?? ''}${student?.lastName?.[0] ?? ''}`.toUpperCase() || 'S';
         return (
-          <div>
-            <div style={{ fontWeight: 500, fontSize: 13 }}>{name}</div>
-            {sid && <div style={{ fontSize: 11, color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>{sid}</div>}
-          </div>
+          <Space size={10} align="center">
+            <Avatar
+              src={photo || undefined}
+              icon={!photo && <UserOutlined />}
+              size={34}
+              style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', fontWeight: 700, flexShrink: 0 }}
+            >
+              {!photo && initials}
+            </Avatar>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{name}</div>
+              {sid && <div style={{ fontSize: 11, color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>{sid}</div>}
+            </div>
+          </Space>
         );
       },
     },
