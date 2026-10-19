@@ -10,6 +10,7 @@ const analyticsRoutes = require('./analytics.routes');
 const receiptRoutes = require('./receipt.routes');
 const faceRoutes = require('./face.routes');
 const esp32Routes = require('./esp32.routes');
+const busUnpaidRoutes = require('./busUnpaid.routes');
 
 const router = express.Router();
 router.use('/auth', authRoutes);
@@ -17,6 +18,7 @@ router.use('/students', studentRoutes);
 router.use('/buses', busRoutes);
 router.use('/travel', travelRoutes);
 router.use('/unpaid', unpaidRoutes);
+router.use('/bus-unpaid', busUnpaidRoutes);
 router.use('/reports', reportRoutes);
 router.use('/webhook', webhookRoutes);
 router.use('/analytics', analyticsRoutes);

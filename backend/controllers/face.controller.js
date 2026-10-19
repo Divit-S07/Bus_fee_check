@@ -6,6 +6,7 @@ const TravelRecord = require('../models/TravelRecord');
 const UnpaidTravel = require('../models/UnpaidTravel');
 const { getIO } = require('../sockets');
 const faceAI = require('../services/faceAI.service');
+const busUnpaidService = require('../services/busUnpaidTracking.service');
 
 const DEFAULT_LNG = parseFloat(process.env.DEFAULT_LOCATION_LONGITUDE || '0');
 const DEFAULT_LAT = parseFloat(process.env.DEFAULT_LOCATION_LATITUDE || '0');
@@ -239,6 +240,9 @@ exports.scanFace = async (req, res, next) => {
       repeatCount,
     });
 
+    // Automatically update bus-wise unpaid tracking for this student and bus
+    const busTracking = await busUnpaidService.recordUnpaidBoarding(student, bus, travel, unpaid);
+
     const result = {
       matched: true,
       status: 'unpaid_recorded',
@@ -250,6 +254,7 @@ exports.scanFace = async (req, res, next) => {
       travelId: travel._id,
       unpaidId: unpaid._id,
       repeatCount,
+      busUnpaidTripCount: busTracking?.unpaidTripCount || repeatCount,
       isRepeatOffense: repeatCount > 1,
       model: match.model,
       frames: match.frames_used,
